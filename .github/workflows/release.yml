@@ -56,6 +56,13 @@ jobs:
             artifact_dir: build/macos-release/DEVICEControl_artefacts
             package_name: macOS_arm64
 
+          - name: macOS Sonoma Apple Silicon
+            os: macos-14
+            preset: macos-release
+            artifact_dir: build/macos-release/DEVICEControl_artefacts
+            package_name: macOS_Sonoma_arm64
+            cmake_extra_args: -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+
           - name: Windows x64
             os: windows-2022
             preset: windows-release
@@ -99,7 +106,7 @@ jobs:
           git --version
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_extra_args }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
