@@ -32,3 +32,16 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# Local DEVICEControl files
+/Backlog.xlsx
+*.emberremote
+
+# Credentials / local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
