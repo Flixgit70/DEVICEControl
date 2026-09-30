@@ -71,6 +71,21 @@ struct ProviderPath
         return dot < 0 ? juce::String() : qualifiedPath.substring(dot + 1);
     }
 
+    /** Returns the qualified directory which contains a qualified parameter.
+
+        Ember+ values are delivered by GetDirectory on the containing node.
+        This helper is therefore also useful when restoring mapped controls
+        after a provider reconnect.
+    */
+    static juce::String parentDirectory(const juce::String& qualifiedPath)
+    {
+        const auto id = providerId(qualifiedPath);
+        const auto local = localPath(qualifiedPath);
+        const auto dot = local.lastIndexOfChar('.');
+        const auto parent = dot < 0 ? juce::String() : local.substring(0, dot);
+        return id.isEmpty() ? parent : qualify(id, parent);
+    }
+
     static bool isProviderRoot(const juce::String& path)
     {
         return isQualified(path) && path.indexOfChar('.') < 0;

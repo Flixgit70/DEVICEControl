@@ -33,7 +33,11 @@ Thumbs.db
 *.tmp
 *.bak
 
-# Local DEVICEControl files
+# macOS archive metadata / local source backups
+__MACOSX/
+*.before_*
+
+# Local DEVICEControl working files
 /Backlog.xlsx
 *.emberremote
 

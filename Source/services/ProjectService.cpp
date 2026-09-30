@@ -27,6 +27,8 @@ juce::String controlTypeToString(ControlType type)
     {
         case ControlType::encoder: return "encoder";
         case ControlType::showContent: return "show_content";
+        case ControlType::meter: return "meter";
+        case ControlType::matrix: return "matrix";
         case ControlType::button: return "button";
     }
     return "button";
@@ -38,7 +40,46 @@ ControlType controlTypeFromString(juce::String text)
     if (text.equalsIgnoreCase("encoder")) return ControlType::encoder;
     if (text.equalsIgnoreCase("show_content") || text.equalsIgnoreCase("show content")
         || text.equalsIgnoreCase("content")) return ControlType::showContent;
+    if (text.equalsIgnoreCase("meter") || text.equalsIgnoreCase("ppm"))
+        return ControlType::meter;
+    if (text.equalsIgnoreCase("matrix")) return ControlType::matrix;
     return ControlType::button;
+}
+
+juce::var matrixAxisNodeToVar(const MatrixAxisNode& node)
+{
+    auto object = std::make_unique<juce::DynamicObject>();
+    object->setProperty("id", node.id);
+    object->setProperty("name", node.name);
+    object->setProperty("folder", node.folder);
+    object->setProperty("signal", node.signalNumber);
+    object->setProperty("expanded", node.expanded);
+    if (node.folder)
+    {
+        juce::Array<juce::var> children;
+        for (const auto& child : node.children) children.add(matrixAxisNodeToVar(child));
+        object->setProperty("children", children);
+    }
+    return juce::var(object.release());
+}
+
+MatrixAxisNode matrixAxisNodeFromVar(const juce::var& value)
+{
+    MatrixAxisNode node;
+    auto* object = value.getDynamicObject();
+    if (!object) return node;
+    node.id = object->getProperty("id").toString();
+    node.name = object->getProperty("name").toString();
+    node.folder = (bool) object->getProperty("folder");
+    node.signalNumber = object->hasProperty("signal") ? (int) object->getProperty("signal") : -1;
+    node.expanded = object->hasProperty("expanded") ? (bool) object->getProperty("expanded") : true;
+    if (node.id.isEmpty())
+        node.id = node.folder ? "folder:" + juce::Uuid().toString()
+                              : "signal:" + juce::String(node.signalNumber);
+    if (auto children = object->getProperty("children"); children.isArray())
+        for (const auto& child : *children.getArray())
+            node.children.push_back(matrixAxisNodeFromVar(child));
+    return node;
 }
 
 ProviderConfig legacyConfig(const juce::String& host, int port)
@@ -59,7 +100,7 @@ bool ProjectService::save(const juce::File& file, const PageSet& pages,
                           const std::vector<ProviderConfig>& providers, juce::String& error)
 {
     auto root = std::make_unique<juce::DynamicObject>();
-    root->setProperty("formatVersion", 7);
+    root->setProperty("formatVersion", 9);
 
     juce::Array<juce::var> providerVars;
     for (const auto& provider : providers)
@@ -102,6 +143,8 @@ bool ProjectService::save(const juce::File& file, const PageSet& pages,
             co->setProperty("label2", c.label2);
             co->setProperty("type", controlTypeToString(c.type));
             co->setProperty("colour", colourToString(c.colourArgb));
+            co->setProperty("tileWidth", c.tileWidth);
+            co->setProperty("tileHeight", c.tileHeight);
             co->setProperty("orangeAboveThresholdEnabled", c.orangeAboveThresholdEnabled);
             co->setProperty("orangeAboveThreshold", c.orangeAboveThreshold);
             co->setProperty("redAboveThresholdEnabled", c.redAboveThresholdEnabled);
@@ -110,6 +153,15 @@ bool ProjectService::save(const juce::File& file, const PageSet& pages,
             co->setProperty("orangeBelowThreshold", c.orangeBelowThreshold);
             co->setProperty("redBelowThresholdEnabled", c.redBelowThresholdEnabled);
             co->setProperty("redBelowThreshold", c.redBelowThreshold);
+            if (c.type == ControlType::matrix)
+            {
+                juce::Array<juce::var> targets;
+                juce::Array<juce::var> sources;
+                for (const auto& node : c.matrix.targets) targets.add(matrixAxisNodeToVar(node));
+                for (const auto& node : c.matrix.sources) sources.add(matrixAxisNodeToVar(node));
+                co->setProperty("matrixTargets", targets);
+                co->setProperty("matrixSources", sources);
+            }
             controls.add(juce::var(co.release()));
         }
         po->setProperty("controls", controls);
@@ -188,6 +240,17 @@ bool ProjectService::load(const juce::File& file, PageSet& pages,
                 c.label2 = co->getProperty("label2").toString();
                 c.type = controlTypeFromString(co->getProperty("type").toString());
                 c.colourArgb = colourFromVar(co->getProperty("colour"));
+                c.tileWidth = co->hasProperty("tileWidth") ? juce::jmax(0, (int) co->getProperty("tileWidth")) : 0;
+                c.tileHeight = co->hasProperty("tileHeight") ? juce::jmax(0, (int) co->getProperty("tileHeight")) : 0;
+                if (c.type == ControlType::matrix)
+                {
+                    if (auto targets = co->getProperty("matrixTargets"); targets.isArray())
+                        for (const auto& node : *targets.getArray())
+                            c.matrix.targets.push_back(matrixAxisNodeFromVar(node));
+                    if (auto sources = co->getProperty("matrixSources"); sources.isArray())
+                        for (const auto& node : *sources.getArray())
+                            c.matrix.sources.push_back(matrixAxisNodeFromVar(node));
+                }
                 const bool hasNewThresholds = co->hasProperty("orangeAboveThresholdEnabled")
                                            || co->hasProperty("redAboveThresholdEnabled")
                                            || co->hasProperty("orangeBelowThresholdEnabled")

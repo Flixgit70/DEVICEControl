@@ -34,8 +34,11 @@ public:
     void disconnectAll();
 
     bool requestDirectory(const juce::String& qualifiedPath);
+    bool refreshDirectory(const juce::String& qualifiedPath);
     void startSubtreeScan(const std::vector<juce::String>& qualifiedRoots);
     bool setParameterValue(const juce::String& qualifiedPath, const juce::var& value);
+    bool setMatrixCrosspoint(const juce::String& qualifiedPath, int target, int source,
+                             bool connect);
 
     bool anyConnected() const;
     bool isProviderConnected(const juce::String& providerId) const;
@@ -47,6 +50,7 @@ public:
     juce::String providerStatus(const juce::String& providerId) const;
 
     std::vector<TreeEntry> treeSnapshot() const;
+    std::optional<TreeEntry> findTreeEntry(const juce::String& qualifiedPath) const;
     std::vector<ParameterInfo> parameterSnapshot() const;
     std::optional<ParameterInfo> findParameter(const juce::String& qualifiedPath) const;
 

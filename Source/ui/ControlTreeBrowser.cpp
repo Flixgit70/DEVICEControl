@@ -1,9 +1,28 @@
 #include "ControlTreeBrowser.h"
 #include <algorithm>
 #include "../app/Theme.h"
+#include "../model/ProviderConfig.h"
 
 namespace er
 {
+namespace
+{
+bool isTechnicalIdentifier(const juce::String& identifier)
+{
+    // Some providers expose a chain such as /_1/_101/_3e8 as an identifier.
+    // In that case the Ember number path is more useful in the tree.
+    juce::StringArray parts;
+    parts.addTokens(identifier, "/", "");
+    parts.removeEmptyStrings();
+    if (parts.isEmpty()) return false;
+    for (const auto& part : parts)
+        if (!part.startsWithChar('_') || part.length() < 2
+            || !part.substring(1).containsOnly("0123456789abcdefABCDEF"))
+            return false;
+    return true;
+}
+}
+
 class ControlTreeBrowser::BrowserItem final : public juce::TreeViewItem
 {
 public:
@@ -18,10 +37,39 @@ public:
     bool mightContainSubItems() override { return isRoot || entry.kind == TreeEntryKind::node; }
     juce::String getUniqueName() const override { return isRoot ? "__root__" : entry.path; }
 
+    void ensureChildren()
+    {
+        if (childrenBuilt || (!isRoot && entry.kind != TreeEntryKind::node)) return;
+        childrenBuilt = true;
+        owner.addChildren(*this, isRoot ? juce::String() : entry.path);
+    }
+
+    void syncFromOwner()
+    {
+        if (!isRoot)
+        {
+            const auto found = owner.entryIndexByPath.find(entry.path);
+            if (found != owner.entryIndexByPath.end())
+                entry = owner.entries[found->second];
+        }
+
+        if (isRoot || isOpen())
+        {
+            owner.addChildren(*this, isRoot ? juce::String() : entry.path);
+            childrenBuilt = true;
+        }
+
+        const int childCount = getNumSubItems();
+        for (int i = 0; i < childCount; ++i)
+            if (auto* child = dynamic_cast<BrowserItem*>(getSubItem(i)))
+                child->syncFromOwner();
+    }
+
     void paintItem(juce::Graphics& g, int width, int height) override
     {
         if (isRoot) return;
         const bool parameter = entry.kind == TreeEntryKind::parameter;
+        const bool matrix = entry.kind == TreeEntryKind::matrix;
         const bool selected = isSelected();
         const bool filterMatch = owner.isFilterMatch(entry.path);
 
@@ -44,30 +92,45 @@ public:
         g.setColour(textColour);
         g.setFont(juce::FontOptions(12.5f).withStyle((parameter && !selected && !filterMatch) ? "Plain" : "Bold"));
         auto name = entry.displayName();
-        if (!parameter)
+        const auto localPath = ProviderPath::localPath(entry.path);
+        if (localPath.isNotEmpty())
+        {
+            name = "[" + localPath + "]";
+            if (entry.identifier.isNotEmpty() && !isTechnicalIdentifier(entry.identifier))
+                name << "  " << entry.identifier;
+        }
+        if (matrix) name << "  [MATRIX]";
+        if (owner.showDescriptions.getToggleState() && entry.description.isNotEmpty()
+            && !(entry.path.startsWithChar('@') && !entry.path.containsChar('.'))
+            && entry.description != entry.identifier)
+            name << "  —  " << entry.description;
+        if (entry.kind != TreeEntryKind::parameter)
         {
             if (entry.directoryLoading) name << "  ...";
             else if (!entry.directoryLoaded) name << "  >";
         }
 
-        const int valueWidth = parameter ? juce::jlimit(95, 165, width / 3) : 0;
+        const bool hasValueColumn = parameter || matrix;
+        const int valueWidth = hasValueColumn ? juce::jlimit(105, 175, width / 3) : 0;
         const int dividerX = width - valueWidth;
-        const int nameWidth = parameter ? juce::jmax(20, dividerX - 12) : width - 10;
+        const int nameWidth = hasValueColumn ? juce::jmax(20, dividerX - 12) : width - 10;
         g.drawText(name, 6, 0, nameWidth, height, juce::Justification::centredLeft, true);
 
-        if (parameter)
+        if (hasValueColumn)
         {
             g.setColour(Theme::grid);
             g.drawVerticalLine(dividerX, 2.0f, (float) height - 2.0f);
-            g.setColour(selected ? juce::Colours::white : Theme::text);
+            g.setColour(selected ? juce::Colours::white : (matrix ? Theme::accentBlue : Theme::text));
             g.setFont(juce::FontOptions(11.5f));
-            g.drawText(owner.parameterValueText(entry.path), dividerX + 7, 0, valueWidth - 12, height,
+            g.drawText(matrix ? entry.matrix.summary() : owner.parameterValueText(entry.path),
+                       dividerX + 7, 0, valueWidth - 12, height,
                        juce::Justification::centredRight, true);
         }
     }
 
     void itemOpennessChanged(bool isNowOpen) override
     {
+        if (isNowOpen) ensureChildren();
         if (isRoot) return;
         if (!owner.rebuilding)
         {
@@ -90,10 +153,17 @@ public:
             owner.showBranchContextMenu(entry.path, event.eventComponent);
     }
 
+    void itemDoubleClicked(const juce::MouseEvent&) override
+    {
+        if (!isRoot && entry.kind == TreeEntryKind::matrix)
+            owner.openMatrix(entry.path);
+    }
+
 private:
     ControlTreeBrowser& owner;
     TreeEntry entry;
     bool isRoot = false;
+    bool childrenBuilt = false;
 };
 
 ControlTreeBrowser::ControlTreeBrowser()
@@ -102,7 +172,17 @@ ControlTreeBrowser::ControlTreeBrowser()
     title.setFont(juce::FontOptions(15.0f).withStyle("Bold"));
     addAndMakeVisible(title);
 
-    hint.setText("Browse lazily; Expand All loads a subtree. Filter tokens are ANDed; prefix exclusions with -.", juce::dontSendNotification);
+    showDescriptions.setClickingTogglesState(true);
+    showDescriptions.setToggleState(true, juce::dontSendNotification);
+    showDescriptions.setColour(juce::TextButton::buttonOnColourId, Theme::accentBlue);
+    showDescriptions.onClick = [this]
+    {
+        showDescriptions.setButtonText(showDescriptions.getToggleState() ? "Descriptions: ON" : "Descriptions: OFF");
+        tree.repaint();
+    };
+    addAndMakeVisible(showDescriptions);
+
+    hint.setText("Browse lazily; selecting a Matrix loads its directory. Filter tokens are ANDed; prefix exclusions with -.", juce::dontSendNotification);
     hint.setColour(juce::Label::textColourId, Theme::text);
     hint.setFont(juce::FontOptions(10.5f));
     addAndMakeVisible(hint);
@@ -152,13 +232,9 @@ ControlTreeBrowser::ControlTreeBrowser()
     {
         if (onAddControls) onAddControls(selectedPaths(), ControlType::showContent);
     };
-    collectButton.onClick = [this]
+    addMeter.onClick = [this]
     {
-        if (onCollectSelection) onCollectSelection(selectedPaths());
-    };
-    exportButton.onClick = [this]
-    {
-        if (onExportSelection) onExportSelection(selectedPaths());
+        if (onAddControls) onAddControls(selectedPaths(), ControlType::meter);
     };
     expandAllButton.onClick = [this]
     {
@@ -172,8 +248,7 @@ ControlTreeBrowser::ControlTreeBrowser()
     addAndMakeVisible(addButton);
     addAndMakeVisible(addEncoder);
     addAndMakeVisible(addContent);
-    addAndMakeVisible(collectButton);
-    addAndMakeVisible(exportButton);
+    addAndMakeVisible(addMeter);
     addAndMakeVisible(expandAllButton);
     addAndMakeVisible(collapseAllButton);
 
@@ -192,15 +267,22 @@ ControlTreeBrowser::~ControlTreeBrowser()
 void ControlTreeBrowser::setConnected(bool connected)
 {
     isConnected = connected;
-    collectButton.setEnabled(connected);
-    exportButton.setEnabled(connected);
     addButton.setEnabled(connected);
     addEncoder.setEnabled(connected);
     addContent.setEnabled(connected);
+    addMeter.setEnabled(connected);
     expandAllButton.setEnabled(connected);
     // Collapse only changes the local UI state and remains available even if the provider disconnects.
     collapseAllButton.setEnabled(true);
-    updateFilterActionState();
+
+    // Connection polling must not rebuild the complete filter result.
+    // The match state is recalculated when the filter or tree changes.
+    if (filterText.isEmpty())
+        selectMatchesButton.setEnabled(false);
+
+    matchActionsButton.setEnabled(isConnected
+                                  && filterText.isNotEmpty()
+                                  && selectMatchesButton.isEnabled());
 }
 
 void ControlTreeBrowser::setParameterResolver(std::function<std::optional<ParameterInfo>(const juce::String&)> resolver)
@@ -212,6 +294,14 @@ void ControlTreeBrowser::setParameterResolver(std::function<std::optional<Parame
 void ControlTreeBrowser::repaintValues()
 {
     tree.repaint();
+}
+
+bool ControlTreeBrowser::canSafelyReplaceTree() const
+{
+    // JUCE keeps an internal pointer to the TreeView row currently under the
+    // mouse. Replacing the root while that row is hovered can leave a queued
+    // Linux mouse event referring to an already deleted row component.
+    return !tree.isMouseOverOrDragging(true);
 }
 
 juce::String ControlTreeBrowser::parameterValueText(const juce::String& path) const
@@ -232,7 +322,16 @@ void ControlTreeBrowser::setEntries(std::vector<TreeEntry> newEntries)
     entries = std::move(newEntries);
     recomputeFilter();
     updateFilterActionState();
-    rebuildTree();
+    if (rootItem && !canSafelyReplaceTree())
+    {
+        rebuildEntryIndexes();
+        syncTreeWithoutDeletingItems();
+        fullRebuildPending = true;
+    }
+    else
+    {
+        rebuildTree();
+    }
 }
 
 void ControlTreeBrowser::paint(juce::Graphics& g)
@@ -244,7 +343,9 @@ void ControlTreeBrowser::paint(juce::Graphics& g)
 void ControlTreeBrowser::resized()
 {
     auto r = getLocalBounds().reduced(10);
-    title.setBounds(r.removeFromTop(22));
+    auto titleRow = r.removeFromTop(22);
+    showDescriptions.setBounds(titleRow.removeFromRight(145));
+    title.setBounds(titleRow);
     hint.setBounds(r.removeFromTop(20));
     auto filterRow = r.removeFromTop(30);
     clearFilterButton.setBounds(filterRow.removeFromRight(30).reduced(1));
@@ -257,7 +358,7 @@ void ControlTreeBrowser::resized()
     matchActionsButton.setBounds(matchRow);
     r.removeFromTop(5);
 
-    auto bottom = r.removeFromBottom(142);
+    auto bottom = r.removeFromBottom(104);
     auto treeHeader = r.removeFromTop(20);
     const int headerValueWidth = juce::jlimit(105, 155, treeHeader.getWidth() / 3);
     treeValueHeader.setBounds(treeHeader.removeFromRight(headerValueWidth));
@@ -273,18 +374,14 @@ void ControlTreeBrowser::resized()
 
     auto direct = bottom.removeFromTop(34);
     const int directGap = 5;
-    const int directWidth = juce::jmax(40, (direct.getWidth() - directGap * 2) / 3);
+    const int directWidth = juce::jmax(40, (direct.getWidth() - directGap * 3) / 4);
     addButton.setBounds(direct.removeFromLeft(directWidth));
     direct.removeFromLeft(directGap);
     addEncoder.setBounds(direct.removeFromLeft(directWidth));
     direct.removeFromLeft(directGap);
-    addContent.setBounds(direct);
-    bottom.removeFromTop(4);
-
-    auto bulk = bottom.removeFromTop(34);
-    collectButton.setBounds(bulk.removeFromLeft((bulk.getWidth() - 6) / 2));
-    bulk.removeFromLeft(6);
-    exportButton.setBounds(bulk);
+    addContent.setBounds(direct.removeFromLeft(directWidth));
+    direct.removeFromLeft(directGap);
+    addMeter.setBounds(direct);
 }
 
 void ControlTreeBrowser::recomputeFilter()
@@ -304,12 +401,10 @@ bool ControlTreeBrowser::isFilterMatch(const juce::String& path) const
     return filterText.isNotEmpty() && filterMatchPaths.count(path) != 0;
 }
 
-bool ControlTreeBrowser::hasVisibleDescendant(const juce::String& path) const
+void ControlTreeBrowser::applyPendingFullRebuildIfSafe()
 {
-    if (filterText.isEmpty()) return false;
-    for (const auto& candidate : filterVisiblePaths)
-        if (candidate != path && ControlTreeModel::isSameOrDescendant(candidate, path)) return true;
-    return false;
+    if (fullRebuildPending && canSafelyReplaceTree())
+        rebuildTree();
 }
 
 void ControlTreeBrowser::rebuildTree()
@@ -317,39 +412,96 @@ void ControlTreeBrowser::rebuildTree()
     rebuilding = true;
     tree.setRootItem(nullptr);
     rootItem.reset();
+    rebuildEntryIndexes();
 
     TreeEntry root;
     root.kind = TreeEntryKind::node;
     root.path = {};
     root.identifier = "Root";
     rootItem = std::make_unique<BrowserItem>(*this, root, true);
-    addChildren(*rootItem, {});
+    rootItem->ensureChildren();
     tree.setRootItem(rootItem.get());
     rootItem->setOpen(true);
     rebuilding = false;
+    fullRebuildPending = false;
+    updateSelectionText();
+}
+
+void ControlTreeBrowser::rebuildEntryIndexes()
+{
+    entryIndexByPath.clear();
+    childEntryIndices.clear();
+
+    for (std::size_t i = 0; i < entries.size(); ++i)
+    {
+        const auto& entry = entries[i];
+        entryIndexByPath[entry.path] = i;
+        if (shouldShowEntry(entry.path))
+            childEntryIndices[entry.parentPath].push_back(i);
+    }
+
+    for (auto& [parentPath, indices] : childEntryIndices)
+    {
+        juce::ignoreUnused(parentPath);
+        std::sort(indices.begin(), indices.end(), [this] (std::size_t left, std::size_t right)
+        {
+            const auto& a = entries[left];
+            const auto& b = entries[right];
+            // Synthetic provider roots have no Ember number; sort those by name.
+            if (a.path.startsWithChar('@') && !a.path.containsChar('.')
+                && b.path.startsWithChar('@') && !b.path.containsChar('.'))
+                return a.displayName().compareNatural(b.displayName()) < 0;
+            return ControlTreeModel::numericPathLess(a.path, b.path);
+        });
+    }
+}
+
+void ControlTreeBrowser::syncTreeWithoutDeletingItems()
+{
+    if (!rootItem) return;
+
+    juce::ScopedValueSetter<bool> rebuildGuard(rebuilding, true);
+    rootItem->syncFromOwner();
+    tree.repaint();
     updateSelectionText();
 }
 
 void ControlTreeBrowser::addChildren(juce::TreeViewItem& parent, const juce::String& parentPath)
 {
-    std::vector<TreeEntry> children;
-    for (const auto& e : entries)
-        if (e.parentPath == parentPath && shouldShowEntry(e.path)) children.push_back(e);
+    const auto children = childEntryIndices.find(parentPath);
+    if (children == childEntryIndices.end()) return;
 
-    std::sort(children.begin(), children.end(), [] (const TreeEntry& a, const TreeEntry& b)
-    {
-        if (a.kind != b.kind) return a.kind == TreeEntryKind::node;
-        return a.displayName().compareNatural(b.displayName()) < 0;
-    });
+    std::map<juce::String, BrowserItem*> existing;
+    for (int i = 0; i < parent.getNumSubItems(); ++i)
+        if (auto* item = dynamic_cast<BrowserItem*>(parent.getSubItem(i)))
+            existing[item->getUniqueName()] = item;
 
-    for (const auto& e : children)
+    int insertionPosition = 0;
+    for (const auto index : children->second)
     {
-        auto* item = new BrowserItem(*this, e);
-        parent.addSubItem(item);
-        addChildren(*item, e.path);
-        const bool autoOpenForFilter = filterText.isNotEmpty() && hasVisibleDescendant(e.path);
-        if (openPaths.count(e.path) != 0 || autoOpenForFilter) item->setOpen(true);
-        if (selectedPathSet.count(e.path) != 0) item->setSelected(true, false);
+        const auto& e = entries[index];
+        BrowserItem* item = nullptr;
+        bool added = false;
+        if (const auto found = existing.find(e.path); found != existing.end())
+        {
+            item = found->second;
+        }
+        else
+        {
+            item = new BrowserItem(*this, e);
+            parent.addSubItem(item, insertionPosition);
+            added = true;
+        }
+
+        const bool autoOpenForFilter = filterText.isNotEmpty()
+                                    && childEntryIndices.find(e.path) != childEntryIndices.end();
+        if (openPaths.count(e.path) != 0 || autoOpenForFilter)
+        {
+            item->ensureChildren();
+            item->setOpen(true);
+        }
+        if (added && selectedPathSet.count(e.path) != 0) item->setSelected(true, false);
+        ++insertionPosition;
     }
 }
 
@@ -378,6 +530,34 @@ std::vector<juce::String> ControlTreeBrowser::rootsForContextPath(const juce::St
 
 void ControlTreeBrowser::showBranchContextMenu(const juce::String& path, juce::Component* target)
 {
+    const auto found = entryIndexByPath.find(path);
+    if (found != entryIndexByPath.end() && entries[found->second].kind == TreeEntryKind::matrix)
+    {
+        juce::PopupMenu menu;
+        menu.addItem(1, "Open XY Matrix", isConnected);
+        menu.addItem(2, "Add Matrix to Current Page", isConnected);
+        menu.addItem(3, "Reload Matrix (GetDirectory)", isConnected);
+        menu.addSeparator();
+        const auto details = entries[found->second].matrix.details();
+        menu.addItem(4, "Copy Matrix Details");
+
+        juce::Component::SafePointer<ControlTreeBrowser> safeThis(this);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target),
+                           [safeThis, path, details] (int result)
+                           {
+                               if (safeThis == nullptr || result == 0) return;
+                               if (result == 1)
+                                   safeThis->openMatrix(path);
+                               else if (result == 2 && safeThis->onAddMatrixControl)
+                                   safeThis->onAddMatrixControl(path);
+                               else if (result == 3 && safeThis->onRefreshDirectory)
+                                   safeThis->onRefreshDirectory(path);
+                               else if (result == 4)
+                                   juce::SystemClipboard::copyTextToClipboard("Matrix " + path + "\n" + details);
+                           });
+        return;
+    }
+
     auto roots = rootsForContextPath(path);
     juce::PopupMenu menu;
     menu.addItem(1, "Expand All Below", isConnected);
@@ -404,10 +584,26 @@ void ControlTreeBrowser::itemOpened(const juce::String& path)
     if (isConnected && onOpenDirectory) onOpenDirectory(path);
 }
 
+void ControlTreeBrowser::openMatrix(const juce::String& path)
+{
+    if (isConnected && onOpenMatrix) onOpenMatrix(path);
+}
+
 void ControlTreeBrowser::itemSelectionChanged(const juce::String& path, bool selected)
 {
     if (selected) selectedPathSet.insert(path);
     else selectedPathSet.erase(path);
+
+    if (selected && isConnected && onOpenDirectory)
+    {
+        const auto found = entryIndexByPath.find(path);
+        if (found != entryIndexByPath.end())
+        {
+            const auto& entry = entries[found->second];
+            if (entry.kind == TreeEntryKind::matrix && !entry.directoryLoaded && !entry.directoryLoading)
+                onOpenDirectory(path);
+        }
+    }
     updateSelectionText();
 }
 
@@ -419,8 +615,9 @@ std::vector<juce::String> ControlTreeBrowser::selectedPaths() const
 int ControlTreeBrowser::selectedBranchCount() const
 {
     int count = 0;
-    for (const auto& entry : entries)
-        if (entry.kind == TreeEntryKind::node && selectedPathSet.count(entry.path) != 0)
+    for (const auto& path : selectedPathSet)
+        if (const auto it = entryIndexByPath.find(path);
+            it != entryIndexByPath.end() && entries[it->second].kind == TreeEntryKind::node)
             ++count;
     return count;
 }
@@ -428,8 +625,19 @@ int ControlTreeBrowser::selectedBranchCount() const
 int ControlTreeBrowser::selectedParameterCount() const
 {
     int count = 0;
-    for (const auto& entry : entries)
-        if (entry.kind == TreeEntryKind::parameter && selectedPathSet.count(entry.path) != 0)
+    for (const auto& path : selectedPathSet)
+        if (const auto it = entryIndexByPath.find(path);
+            it != entryIndexByPath.end() && entries[it->second].kind == TreeEntryKind::parameter)
+            ++count;
+    return count;
+}
+
+int ControlTreeBrowser::selectedMatrixCount() const
+{
+    int count = 0;
+    for (const auto& path : selectedPathSet)
+        if (const auto it = entryIndexByPath.find(path);
+            it != entryIndexByPath.end() && entries[it->second].kind == TreeEntryKind::matrix)
             ++count;
     return count;
 }
@@ -438,10 +646,12 @@ juce::String ControlTreeBrowser::selectedParameterSummary() const
 {
     juce::String firstName;
     int count = 0;
-    for (const auto& entry : entries)
+    for (const auto& path : selectedPathSet)
     {
-        if (entry.kind != TreeEntryKind::parameter || selectedPathSet.count(entry.path) == 0)
-            continue;
+        const auto it = entryIndexByPath.find(path);
+        if (it == entryIndexByPath.end()) continue;
+        const auto& entry = entries[it->second];
+        if (entry.kind != TreeEntryKind::parameter) continue;
         if (firstName.isEmpty())
             firstName = entry.displayName();
         ++count;
@@ -456,9 +666,10 @@ juce::String ControlTreeBrowser::selectedParameterSummary() const
 
 juce::String ControlTreeBrowser::selectedParameterPath() const
 {
-    for (const auto& entry : entries)
-        if (entry.kind == TreeEntryKind::parameter && selectedPathSet.count(entry.path) != 0)
-            return entry.path;
+    for (const auto& path : selectedPathSet)
+        if (const auto it = entryIndexByPath.find(path);
+            it != entryIndexByPath.end() && entries[it->second].kind == TreeEntryKind::parameter)
+            return path;
     return {};
 }
 
@@ -485,25 +696,24 @@ void ControlTreeBrowser::showFilterActionsMenu()
         return;
 
     juce::PopupMenu menu;
-    menu.addItem(1, "Add matches to Mapping Table");
-    menu.addSeparator();
-    menu.addItem(2, "Add matches as Buttons");
-    menu.addItem(3, "Add matches as Encoders");
-    menu.addItem(4, "Add matches as Show Content");
+    menu.addItem(1, "Add matches as Buttons");
+    menu.addItem(2, "Add matches as Encoders");
+    menu.addItem(3, "Add matches as Show Content");
+    menu.addItem(4, "Add matches as Meters");
 
     juce::Component::SafePointer<ControlTreeBrowser> safeThis(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&matchActionsButton),
                        [safeThis, matches] (int result)
                        {
                            if (safeThis == nullptr || result == 0) return;
-                           if (result == 1 && safeThis->onCollectSelection)
-                               safeThis->onCollectSelection(matches);
-                           else if (result == 2 && safeThis->onAddControls)
+                           if (result == 1 && safeThis->onAddControls)
                                safeThis->onAddControls(matches, ControlType::button);
-                           else if (result == 3 && safeThis->onAddControls)
+                           else if (result == 2 && safeThis->onAddControls)
                                safeThis->onAddControls(matches, ControlType::encoder);
-                           else if (result == 4 && safeThis->onAddControls)
+                           else if (result == 3 && safeThis->onAddControls)
                                safeThis->onAddControls(matches, ControlType::showContent);
+                           else if (result == 4 && safeThis->onAddControls)
+                               safeThis->onAddControls(matches, ControlType::meter);
                        });
 }
 
@@ -518,6 +728,18 @@ void ControlTreeBrowser::updateSelectionText()
 {
     juce::String text;
     if (selectedPathSet.empty()) text = "No selection";
+    else if (selectedPathSet.size() == 1)
+    {
+        const auto found = entryIndexByPath.find(*selectedPathSet.begin());
+        if (found != entryIndexByPath.end() && entries[found->second].kind == TreeEntryKind::matrix)
+        {
+            const auto& entry = entries[found->second];
+            text = "Matrix " + entry.displayName() + " [" + entry.path + "]";
+            const auto summary = entry.matrix.summary();
+            if (summary.isNotEmpty()) text << "  |  " << summary;
+        }
+        else text = "1 selected";
+    }
     else text = juce::String((int) selectedPathSet.size()) + " selected";
 
     if (filterText.isNotEmpty())

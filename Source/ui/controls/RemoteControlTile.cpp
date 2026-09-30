@@ -49,6 +49,20 @@ juce::uint32 colourForMenuId(int menuId)
 
 RemoteControlTile::RemoteControlTile(ControlMapping mappingToUse) : controlMapping(std::move(mappingToUse)) {}
 
+void RemoteControlTile::setTileSelected(bool selected)
+{
+    if (tileSelected == selected) return;
+    tileSelected = selected;
+    repaint();
+}
+
+void RemoteControlTile::setControlColour(juce::uint32 colourArgb)
+{
+    controlMapping.colourArgb = colourArgb;
+    applyControlColour();
+    repaint();
+}
+
 void RemoteControlTile::watchForContextMenu(juce::Component& component)
 {
     component.addMouseListener(this, false);
@@ -73,10 +87,39 @@ void RemoteControlTile::applyPathTooltip()
             tooltipTarget->setTooltip(tooltip);
 }
 
+bool RemoteControlTile::requestSelection(const juce::ModifierKeys& modifiers,
+                                         bool allowPlainSelection)
+{
+    if (!onSelectionGesture)
+        return false;
+
+    TileSelectionGesture gesture;
+    if (modifiers.isShiftDown())
+        gesture = modifiers.isCommandDown() ? TileSelectionGesture::addRange
+                                            : TileSelectionGesture::range;
+    else if (modifiers.isCommandDown())
+        gesture = TileSelectionGesture::toggle;
+    else if (allowPlainSelection)
+        gesture = TileSelectionGesture::replace;
+    else
+        return false;
+
+    onSelectionGesture(controlMapping.parameterPath, gesture);
+    return true;
+}
+
 void RemoteControlTile::mouseDown(const juce::MouseEvent& event)
 {
     if (!event.mods.isPopupMenu())
+    {
+        // Interactive children intercept modified clicks themselves so that a
+        // selection gesture never changes a value or opens a content window.
+        const bool interactiveChild = dynamic_cast<juce::Button*>(event.eventComponent) != nullptr
+                                   || dynamic_cast<juce::Slider*>(event.eventComponent) != nullptr;
+        if (!interactiveChild)
+            requestSelection(event.mods, true);
         return;
+    }
 
     juce::PopupMenu colourMenu;
     colourMenu.addItem(100, "Default", true, controlMapping.colourArgb == 0);
@@ -85,6 +128,7 @@ void RemoteControlTile::mouseDown(const juce::MouseEvent& event)
         colourMenu.addItem(choice.menuId, choice.name, true, controlMapping.colourArgb == choice.argb);
 
     juce::PopupMenu menu;
+    menu.addItem(3, tileSelected ? "Deselect" : "Select");
     menu.addItem(2, "Edit Label 2...");
     menu.addSubMenu("Colour", colourMenu);
     menu.addSeparator();
@@ -110,12 +154,19 @@ void RemoteControlTile::mouseDown(const juce::MouseEvent& event)
                                return;
                            }
 
+                           if (result == 3)
+                           {
+                               safeThis->setTileSelected(!safeThis->isTileSelected());
+                               if (safeThis->onSelectionChange)
+                                   safeThis->onSelectionChange(safeThis->controlMapping.parameterPath,
+                                                               safeThis->isTileSelected());
+                               return;
+                           }
+
                            if (result >= 100 && result < 200)
                            {
                                const auto colour = colourForMenuId(result);
-                               safeThis->controlMapping.colourArgb = colour;
-                               safeThis->applyControlColour();
-                               safeThis->repaint();
+                               safeThis->setControlColour(colour);
                                if (safeThis->onColourChange)
                                    safeThis->onColourChange(safeThis->controlMapping.parameterPath, colour);
                            }
@@ -141,6 +192,12 @@ void RemoteControlTile::paintFrame(juce::Graphics& g, const ParameterInfo* info)
         g.setColour(info && info->writable ? Theme::outline : Theme::outline);
     }
     g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 8.0f, 1.0f);
+
+    if (tileSelected)
+    {
+        g.setColour(Theme::accentBlue.brighter(0.25f));
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1.5f), 7.0f, 2.5f);
+    }
 }
 
 ButtonTile::ButtonTile(ControlMapping m) : RemoteControlTile(std::move(m))
@@ -164,8 +221,12 @@ ButtonTile::ButtonTile(ControlMapping m) : RemoteControlTile(std::move(m))
     addAndMakeVisible(secondaryName);
 
     addAndMakeVisible(button);
-    button.setColour(juce::TextButton::textColourOffId, Theme::textBright);
-    button.setColour(juce::TextButton::textColourOnId, Theme::textBright);
+    button.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    button.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    button.selectionMouseDown = [this] (const juce::MouseEvent& event)
+    {
+        return !event.mods.isPopupMenu() && requestSelection(event.mods, false);
+    };
 
     meta.setFont(juce::FontOptions(8.0f));
     meta.setColour(juce::Label::textColourId, juce::Colours::grey);
@@ -227,6 +288,12 @@ void ButtonTile::beginLabel2Edit()
     secondaryName.showEditor();
 }
 
+void ButtonTile::setControlLabel2(const juce::String& label2)
+{
+    controlMapping.label2 = label2;
+    secondaryName.setText(label2, juce::dontSendNotification);
+}
+
 void ButtonTile::paint(juce::Graphics& g) { paintFrame(g, lastInfo ? &*lastInfo : nullptr); }
 void ButtonTile::resized()
 {
@@ -264,8 +331,11 @@ void ButtonTile::refresh(const ParameterInfo& p)
     repaint();
 }
 
-ShowContentTile::ShowContentTile(ControlMapping m) : RemoteControlTile(std::move(m))
+ShowContentTile::ShowContentTile(ControlMapping m)
+    : RemoteControlTile(std::move(m)),
+      resizeCorner(this, &resizeConstrainer)
 {
+    resizeConstrainer.setSizeLimits(180, 110, 720, 420);
     name.setText(controlMapping.label.isNotEmpty() ? controlMapping.label : controlMapping.parameterPath, juce::dontSendNotification);
     name.setFont(juce::FontOptions(11.0f).withStyle("Bold"));
     name.setJustificationType(juce::Justification::centred);
@@ -284,7 +354,25 @@ ShowContentTile::ShowContentTile(ControlMapping m) : RemoteControlTile(std::move
     };
     addAndMakeVisible(secondaryName);
 
+    selectionToggle.setButtonText(juce::String());
+    selectionToggle.onClick = [this]
+    {
+        const auto modifiers = juce::ModifierKeys::getCurrentModifiersRealtime();
+        if ((modifiers.isCommandDown() || modifiers.isShiftDown())
+            && requestSelection(modifiers, false))
+            return;
+
+        setTileSelected(selectionToggle.getToggleState());
+        if (onSelectionChange)
+            onSelectionChange(controlMapping.parameterPath, isTileSelected());
+    };
+    addAndMakeVisible(selectionToggle);
+
     button.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    button.selectionMouseDown = [this] (const juce::MouseEvent& event)
+    {
+        return !event.mods.isPopupMenu() && requestSelection(event.mods, false);
+    };
     button.onClick = [this]
     {
         if (!lastInfo || !lastInfo->online || lastInfo->kind != ParameterKind::stringValue)
@@ -303,6 +391,9 @@ ShowContentTile::ShowContentTile(ControlMapping m) : RemoteControlTile(std::move
     };
     addAndMakeVisible(button);
 
+    addAndMakeVisible(resizeCorner);
+    resizeCorner.setAlwaysOnTop(true);
+
     meta.setFont(juce::FontOptions(8.0f));
     meta.setColour(juce::Label::textColourId, juce::Colours::grey);
     meta.setJustificationType(juce::Justification::centred);
@@ -314,6 +405,7 @@ ShowContentTile::ShowContentTile(ControlMapping m) : RemoteControlTile(std::move
     watchForContextMenu(meta);
     applyControlColour();
     applyPathTooltip();
+    selectionToggle.setTooltip("Select for group resize and colour changes");
 }
 
 void ShowContentTile::applyControlColour()
@@ -334,6 +426,18 @@ void ShowContentTile::beginLabel2Edit()
     secondaryName.showEditor();
 }
 
+void ShowContentTile::setControlLabel2(const juce::String& label2)
+{
+    controlMapping.label2 = label2;
+    secondaryName.setText(label2, juce::dontSendNotification);
+}
+
+void ShowContentTile::setTileSelected(bool selected)
+{
+    RemoteControlTile::setTileSelected(selected);
+    selectionToggle.setToggleState(selected, juce::dontSendNotification);
+}
+
 void ShowContentTile::paint(juce::Graphics& g)
 {
     paintFrame(g, lastInfo ? &*lastInfo : nullptr);
@@ -342,18 +446,36 @@ void ShowContentTile::paint(juce::Graphics& g)
 void ShowContentTile::resized()
 {
     auto r = getLocalBounds().reduced(5);
-    name.setBounds(r.removeFromTop(17));
+    auto titleRow = r.removeFromTop(17);
+    selectionToggle.setBounds(titleRow.removeFromRight(18));
+    name.setBounds(titleRow);
     secondaryName.setBounds(r.removeFromTop(14));
     r.removeFromTop(1);
     meta.setBounds(r.removeFromBottom(12));
     button.setBounds(r.reduced(3, 2));
+    resizeCorner.setBounds(getWidth() - 16, getHeight() - 16, 16, 16);
+    resizeCorner.toFront(false);
+
+    if (getWidth() > 0 && getHeight() > 0
+        && (controlMapping.tileWidth != getWidth() || controlMapping.tileHeight != getHeight()))
+    {
+        const int widthDelta = controlMapping.tileWidth > 0 ? getWidth() - controlMapping.tileWidth : 0;
+        const int heightDelta = controlMapping.tileHeight > 0 ? getHeight() - controlMapping.tileHeight : 0;
+        controlMapping.tileWidth = getWidth();
+        controlMapping.tileHeight = getHeight();
+        if (onSizeChange)
+            onSizeChange(controlMapping.parameterPath, getWidth(), getHeight(), widthDelta, heightDelta);
+    }
 }
 
 void ShowContentTile::refresh(const ParameterInfo& p)
 {
     lastInfo = p;
-    button.setEnabled(p.online && p.kind == ParameterKind::stringValue);
-    button.setButtonText("Show Content");
+    const bool available = p.online && p.kind == ParameterKind::stringValue;
+    button.setEnabled(available);
+    const auto content = available ? p.value.toString() : juce::String();
+    button.setContentText(available ? content : juce::String("Offline"));
+    button.setTooltip(available ? "Click to open/edit full content" : "Content unavailable");
     meta.setText((p.localPath.isNotEmpty() ? p.localPath : p.path) + "  |  " + ParameterInfo::kindToString(p.kind),
                  juce::dontSendNotification);
     applyControlColour();
@@ -384,6 +506,10 @@ EncoderTile::EncoderTile(ControlMapping m) : RemoteControlTile(std::move(m))
     slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     slider.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f, juce::MathConstants<float>::pi * 2.8f, true);
     slider.setScrollWheelEnabled(true);
+    slider.selectionMouseDown = [this] (const juce::MouseEvent& event)
+    {
+        return !event.mods.isPopupMenu() && requestSelection(event.mods, false);
+    };
     slider.onValueChange = [this]
     {
         if (updating || !lastInfo || !lastInfo->writable || !onWrite) return;
@@ -440,6 +566,12 @@ void EncoderTile::applyControlColour()
 void EncoderTile::beginLabel2Edit()
 {
     secondaryName.showEditor();
+}
+
+void EncoderTile::setControlLabel2(const juce::String& label2)
+{
+    controlMapping.label2 = label2;
+    secondaryName.setText(label2, juce::dontSendNotification);
 }
 
 void EncoderTile::ensureOpenEndedRangeFor(double displayValue)

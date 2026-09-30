@@ -19,8 +19,11 @@ public:
     virtual bool connectTo(const juce::String& host, int port) = 0;
     virtual void disconnect() = 0;
     virtual bool requestDirectory(const juce::String& numericPath) = 0;
+    virtual bool refreshDirectory(const juce::String& numericPath) = 0;
     virtual void startSubtreeScan(const std::vector<juce::String>& numericRoots) = 0;
     virtual bool setParameterValue(const juce::String& numericPath, const juce::var& newValue) = 0;
+    virtual bool setMatrixCrosspoint(const juce::String& numericPath, int target, int source,
+                                     bool connect) = 0;
 
     virtual bool isConnected() const noexcept = 0;
     virtual bool isScanning() const noexcept = 0;

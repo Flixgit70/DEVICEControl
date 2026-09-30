@@ -1,6 +1,7 @@
 #include "PageListView.h"
 #include "../model/ControlAlertPolicy.h"
 #include "StringContentViewer.h"
+#include "ContentPreview.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -8,6 +9,43 @@
 
 namespace er
 {
+bool PageListView::ReorderTable::isInterestedInDragSource(const SourceDetails& details)
+{
+    return details.sourceComponent.get() == this
+        && details.description.toString() == "DEVICEControl.PageListReorder";
+}
+
+void PageListView::ReorderTable::itemDragMove(const SourceDetails& details)
+{
+    const auto next = getInsertionIndexForPosition(details.localPosition.x, details.localPosition.y);
+    if (next != insertionIndex) { insertionIndex = next; repaint(); }
+}
+
+void PageListView::ReorderTable::itemDragExit(const SourceDetails&)
+{
+    insertionIndex = -1;
+    repaint();
+}
+
+void PageListView::ReorderTable::itemDropped(const SourceDetails& details)
+{
+    const auto target = getInsertionIndexForPosition(details.localPosition.x, details.localPosition.y);
+    insertionIndex = -1;
+    repaint();
+    if (target >= 0 && onDrop) onDrop(target);
+}
+
+void PageListView::ReorderTable::paintOverChildren(juce::Graphics& g)
+{
+    juce::TableListBox::paintOverChildren(g);
+    if (insertionIndex < 0 || getNumRows() == 0) return;
+    const auto y = insertionIndex == getNumRows()
+        ? getRowPosition(getNumRows() - 1, true).getBottom()
+        : getRowPosition(insertionIndex, true).getY();
+    g.setColour(Theme::accentBlue);
+    g.fillRect(0, y - 2, getWidth(), 3);
+}
+
 namespace
 {
 juce::Colour alertColour(AlertState state)
@@ -21,10 +59,49 @@ juce::Colour alertColour(AlertState state)
     return Theme::green;
 }
 
+struct ColourChoice
+{
+    int menuId;
+    const char* name;
+    juce::uint32 argb;
+};
+
+constexpr ColourChoice colourChoices[] = {
+    { 101, "Orange", 0xffff9600 },
+    { 102, "Blue",   0xff00beff },
+    { 103, "Green",  0xff00ff78 },
+    { 104, "Red",    0xffd95050 },
+    { 105, "Purple", 0xff9a6ad6 },
+    { 106, "Teal",   0xff2fa7a0 },
+    { 107, "Yellow", 0xfffffc79 },
+    { 108, "Grey",   0xff69727f }
+};
+
+juce::uint32 colourForMenuId(int menuId)
+{
+    if (menuId == 100) return 0;
+    for (const auto& choice : colourChoices)
+        if (choice.menuId == menuId) return choice.argb;
+    return 0;
+}
+
+std::optional<juce::Colour> displayAccent(const ControlMapping& mapping,
+                                          const std::optional<ParameterInfo>& info)
+{
+    if (info && ControlAlertPolicy::hasThresholds(mapping)
+        && ControlAlertPolicy::supportsThresholds(*info))
+        return alertColour(ControlAlertPolicy::evaluate(mapping, *info));
+    if (mapping.colourArgb != 0)
+        return juce::Colour(mapping.colourArgb);
+    return std::nullopt;
+}
+
 class CommitEditor final : public juce::TextEditor
 {
 public:
     std::function<void(const juce::String&)> commit;
+    std::function<void(const juce::MouseEvent&)> popup;
+    std::function<bool()> returnPressed;
 
     CommitEditor()
     {
@@ -33,7 +110,15 @@ public:
         setColour(juce::TextEditor::backgroundColourId, Theme::editor);
         setColour(juce::TextEditor::outlineColourId, Theme::outline);
         setColour(juce::TextEditor::focusedOutlineColourId, Theme::accentBlue);
-        onReturnKey = [this] { sendCommit(); giveAwayKeyboardFocus(); };
+        onReturnKey = [this]
+        {
+            juce::Component::SafePointer<CommitEditor> safeThis(this);
+            sendCommit();
+            if (safeThis == nullptr)
+                return;
+            if (!returnPressed || !returnPressed())
+                giveAwayKeyboardFocus();
+        };
         onFocusLost = [this] { sendCommit(); };
     }
 
@@ -56,20 +141,178 @@ public:
             commit(now);
     }
 
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (event.mods.isPopupMenu() && popup && !hasKeyboardFocus(true))
+        {
+            popup(event);
+            return;
+        }
+        juce::TextEditor::mouseDown(event);
+    }
+
 private:
     juce::String lastCommitted;
 };
 
-class ContentButton final : public juce::TextButton
+class ContextTextButton : public juce::TextButton
+{
+public:
+    explicit ContextTextButton(const juce::String& text) : juce::TextButton(text)
+    {
+        setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+        setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    }
+    std::function<void(const juce::MouseEvent&)> popup;
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (event.mods.isPopupMenu() && popup)
+        {
+            popup(event);
+            return;
+        }
+        juce::TextButton::mouseDown(event);
+    }
+};
+
+// Button-type controls use a small clickable value display in the List view.
+// Draw its text explicitly so no LookAndFeel, enabled, toggle, or read-only
+// state can reduce the value text opacity.
+class PureWhiteValueButton final : public ContextTextButton
+{
+public:
+    explicit PureWhiteValueButton(const juce::String& text) : ContextTextButton(text) {}
+
+    void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+    {
+        const auto background = findColour(getToggleState()
+                                               ? juce::TextButton::buttonOnColourId
+                                               : juce::TextButton::buttonColourId);
+        getLookAndFeel().drawButtonBackground(g, *this, background, highlighted, down);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(getLookAndFeel().getTextButtonFont(*this, getHeight()));
+        g.drawFittedText(getButtonText(), getLocalBounds().reduced(5, 2),
+                         juce::Justification::centred, 1, 0.72f);
+    }
+};
+
+class ContentButton final : public ContextTextButton
 {
 public:
     std::function<void()> show;
 
-    ContentButton() : juce::TextButton("Show Content")
+    ContentButton() : ContextTextButton("Show Content")
     {
         onClick = [this] { if (show) show(); };
     }
 };
+
+class SmallValueButton final : public juce::Component
+{
+public:
+    std::function<void()> activate;
+    std::function<void(const juce::MouseEvent&)> popup;
+
+    SmallValueButton() : button("-")
+    {
+        addAndMakeVisible(button);
+        button.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+        button.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+        button.onClick = [this] { if (activate) activate(); };
+        button.popup = [this] (const juce::MouseEvent& event)
+        {
+            if (popup) popup(event);
+        };
+    }
+
+    void setText(const juce::String& text) { button.setButtonText(text); }
+    void setButtonEnabled(bool enabled)
+    {
+        // JUCE fades disabled button text. Keep the component enabled for
+        // full-white rendering and block mouse input separately when the
+        // represented parameter cannot be operated.
+        button.setEnabled(true);
+        button.setInterceptsMouseClicks(enabled, enabled);
+    }
+    void setToggleState(bool state) { button.setToggleState(state, juce::dontSendNotification); }
+    void setPopupTooltip(const juce::String& text) { button.setTooltip(text); }
+
+    void setAccent(std::optional<juce::Colour> accent)
+    {
+        if (!accent)
+        {
+            button.removeColour(juce::TextButton::buttonColourId);
+            button.removeColour(juce::TextButton::buttonOnColourId);
+            return;
+        }
+        button.setColour(juce::TextButton::buttonColourId, accent->darker(0.28f));
+        button.setColour(juce::TextButton::buttonOnColourId, accent->brighter(0.12f));
+    }
+
+    void resized() override
+    {
+        const int width = juce::jmin(110, juce::jmax(0, getWidth() - 8));
+        button.setBounds((getWidth() - width) / 2, 3, width, juce::jmax(0, getHeight() - 6));
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (event.mods.isPopupMenu() && popup)
+            popup(event);
+    }
+
+private:
+    PureWhiteValueButton button;
+};
+
+juce::String buttonText(const ParameterInfo& info)
+{
+    if (info.kind == ParameterKind::booleanValue)
+        return static_cast<bool>(info.value) ? "ON" : "OFF";
+    if (info.kind == ParameterKind::trigger)
+        return "TRIGGER";
+    if (info.kind == ParameterKind::enumeration)
+    {
+        const auto current = (int) (juce::int64) info.value;
+        for (const auto& entry : info.enumEntries)
+            if (entry.upToFirstOccurrenceOf(":", false, false).getIntValue() == current)
+                return entry.fromFirstOccurrenceOf(":", false, false);
+    }
+    const auto value = info.formattedValue();
+    return value.isNotEmpty() ? value : juce::String("-");
+}
+
+std::optional<juce::var> nextButtonValue(const ParameterInfo& info)
+{
+    switch (info.kind)
+    {
+        case ParameterKind::booleanValue:
+            return juce::var(!static_cast<bool>(info.value));
+        case ParameterKind::trigger:
+            return juce::var(true);
+        case ParameterKind::enumeration:
+        {
+            if (info.enumEntries.isEmpty()) return std::nullopt;
+            const int current = (int) (juce::int64) info.value;
+            int index = -1;
+            for (int i = 0; i < info.enumEntries.size(); ++i)
+                if (info.enumEntries[i].upToFirstOccurrenceOf(":", false, false).getIntValue() == current)
+                {
+                    index = i;
+                    break;
+                }
+            const auto entry = info.enumEntries[(index + 1 + info.enumEntries.size()) % info.enumEntries.size()];
+            return juce::var(entry.upToFirstOccurrenceOf(":", false, false).getIntValue());
+        }
+        case ParameterKind::integer:
+        case ParameterKind::real:
+            return juce::var(info.value.toString().getDoubleValue() == 0.0 ? 1 : 0);
+        default:
+            return std::nullopt;
+    }
+}
 
 std::optional<double> parseDoubleStrict(juce::String text)
 {
@@ -147,6 +390,47 @@ juce::String thresholdText(bool enabled, double value)
     return text;
 }
 
+struct LabelSequence
+{
+    juce::String prefix;
+    juce::int64 firstNumber = 0;
+    int digitCount = 0;
+    bool numbered = false;
+};
+
+LabelSequence parseLabelSequence(juce::String text)
+{
+    text = text.trimEnd();
+    int digitStart = text.length();
+    while (digitStart > 0 && juce::CharacterFunctions::isDigit(text[digitStart - 1]))
+        --digitStart;
+
+    LabelSequence result;
+    if (digitStart == text.length())
+    {
+        result.prefix = text;
+        return result;
+    }
+
+    const auto digits = text.substring(digitStart);
+    result.prefix = text.substring(0, digitStart);
+    result.firstNumber = digits.getLargeIntValue();
+    result.digitCount = digits.length();
+    result.numbered = true;
+    return result;
+}
+
+juce::String labelForSequence(const LabelSequence& sequence, int offset)
+{
+    if (!sequence.numbered)
+        return sequence.prefix;
+
+    auto number = juce::String(sequence.firstNumber + (juce::int64) offset);
+    if (number.length() < sequence.digitCount)
+        number = number.paddedLeft('0', sequence.digitCount);
+    return sequence.prefix + number;
+}
+
 void configureBatchEditor(juce::TextEditor& editor)
 {
     editor.setSelectAllWhenFocused(true);
@@ -163,10 +447,13 @@ PageListView::PageListView()
 {
     auto& h = table.getHeader();
     h.setStretchToFitActive(false);
+    h.addColumn("Move", moveColumn, 48, 42, 70, juce::TableHeaderComponent::notSortable);
     h.addColumn("Type", typeColumn, 82, 60, -1);
     h.addColumn("Label 1", label1Column, 260, 120, -1);
     h.addColumn("Label 2", label2Column, 180, 100, -1);
-    h.addColumn("Value", valueColumn, 115, 85, -1);
+    // Keep the value/content column comfortably wide by default. The table header
+    // remains freely resizable by dragging its column dividers.
+    h.addColumn("Value / Content", valueColumn, 280, 110, -1);
     h.addColumn("Orange >", orangeAboveColumn, 100, 78, -1);
     h.addColumn("Red >", redAboveColumn, 100, 78, -1);
     h.addColumn("Orange <", orangeBelowColumn, 100, 78, -1);
@@ -178,6 +465,7 @@ PageListView::PageListView()
     if (auto* viewport = table.getViewport())
         viewport->setScrollBarsShown(true, true);
     addAndMakeVisible(table);
+    table.onDrop = [this] (int index) { finishReorder(index); };
 
     selectionLabel.setFont(juce::FontOptions(11.5f, juce::Font::bold));
     selectionLabel.setColour(juce::Label::textColourId, Theme::text);
@@ -187,11 +475,19 @@ PageListView::PageListView()
     asButtonButton.onClick = [this] { applyTypeToSelection(ControlType::button); };
     asEncoderButton.onClick = [this] { applyTypeToSelection(ControlType::encoder); };
     asContentButton.onClick = [this] { applyTypeToSelection(ControlType::showContent); };
+    asMeterButton.onClick = [this] { applyTypeToSelection(ControlType::meter); };
     removeSelectedButton.onClick = [this] { removeSelection(); };
+    exportCsvButton.onClick = [this] { if (onExportCsv) onExportCsv(); };
+    importCsvButton.onClick = [this] { if (onImportCsv) onImportCsv(); };
+    exportCsvButton.setTooltip("Export all controls on this page, in list order");
+    importCsvButton.setTooltip("Replace this page with all enabled CSV rows; other pages remain unchanged");
     addAndMakeVisible(asButtonButton);
     addAndMakeVisible(asEncoderButton);
     addAndMakeVisible(asContentButton);
+    addAndMakeVisible(asMeterButton);
     addAndMakeVisible(removeSelectedButton);
+    addAndMakeVisible(exportCsvButton);
+    addAndMakeVisible(importCsvButton);
 
     auto configureLabel = [this] (juce::Label& label)
     {
@@ -242,6 +538,18 @@ void PageListView::setPage(const PageModel& page,
     table.repaint();
 }
 
+void PageListView::setControlLabel2(const juce::String& path, const juce::String& label2)
+{
+    for (auto& mapping : pageSnapshot.controls)
+        if (mapping.parameterPath == path)
+        {
+            mapping.label2 = label2;
+            table.updateContent();
+            table.repaint();
+            return;
+        }
+}
+
 void PageListView::refreshValues()
 {
     table.updateContent();
@@ -265,11 +573,15 @@ void PageListView::resized()
     auto firstRow = bounds.removeFromTop(28);
     selectionLabel.setBounds(firstRow.removeFromLeft(120));
     firstRow.removeFromLeft(5);
-    asButtonButton.setBounds(firstRow.removeFromLeft(74).reduced(1));
-    asEncoderButton.setBounds(firstRow.removeFromLeft(78).reduced(1));
-    asContentButton.setBounds(firstRow.removeFromLeft(78).reduced(1));
+    asButtonButton.setBounds(firstRow.removeFromLeft(68).reduced(1));
+    asEncoderButton.setBounds(firstRow.removeFromLeft(72).reduced(1));
+    asContentButton.setBounds(firstRow.removeFromLeft(68).reduced(1));
+    asMeterButton.setBounds(firstRow.removeFromLeft(64).reduced(1));
     firstRow.removeFromLeft(8);
     removeSelectedButton.setBounds(firstRow.removeFromLeft(82).reduced(1));
+    firstRow.removeFromLeft(8);
+    exportCsvButton.setBounds(firstRow.removeFromLeft(94).reduced(1));
+    importCsvButton.setBounds(firstRow.removeFromLeft(94).reduced(1));
 
     bounds.removeFromTop(3);
     auto secondRow = bounds.removeFromTop(28);
@@ -331,6 +643,25 @@ std::vector<juce::String> PageListView::selectedPaths() const
     return paths;
 }
 
+juce::var PageListView::getDragSourceDescription(const juce::SparseSet<int>& rows)
+{
+    dragPaths.clear();
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const int row = rows[i];
+        if (const auto* mapping = mappingAt(row))
+            dragPaths.push_back(mapping->parameterPath);
+    }
+    return dragPaths.empty() ? juce::var() : juce::var("DEVICEControl.PageListReorder");
+}
+
+void PageListView::finishReorder(int insertionIndex)
+{
+    auto paths = std::move(dragPaths);
+    dragPaths.clear();
+    if (!paths.empty() && onReorder) onReorder(paths, insertionIndex);
+}
+
 std::vector<int> PageListView::rowsAffectedByCellEdit(int row) const
 {
     const auto rows = selectedRows();
@@ -355,9 +686,188 @@ void PageListView::emitMappingsChanged(const std::vector<int>& rows)
         onMappingsChanged(changed);
 }
 
+void PageListView::cellClicked(int row, int, const juce::MouseEvent& event)
+{
+    if (event.mods.isPopupMenu())
+        showRowContextMenu(row, event.eventComponent);
+}
+
+void PageListView::showRowContextMenu(int row, juce::Component* target)
+{
+    if (row < 0 || row >= (int) pageSnapshot.controls.size())
+        return;
+
+    if (!table.isRowSelected(row))
+    {
+        table.deselectAllRows();
+        table.selectRow(row, false, true);
+    }
+
+    const auto rows = rowsAffectedByCellEdit(row);
+    std::vector<juce::String> paths;
+    paths.reserve(rows.size());
+    std::optional<juce::uint32> commonColour;
+    bool first = true;
+    for (const auto selectedRow : rows)
+    {
+        if (selectedRow < 0 || selectedRow >= (int) pageSnapshot.controls.size())
+            continue;
+        const auto& mapping = pageSnapshot.controls[(size_t) selectedRow];
+        paths.push_back(mapping.parameterPath);
+        if (first)
+        {
+            commonColour = mapping.colourArgb;
+            first = false;
+        }
+        else if (commonColour && *commonColour != mapping.colourArgb)
+        {
+            commonColour.reset();
+        }
+    }
+    if (paths.empty())
+        return;
+
+    juce::PopupMenu colourMenu;
+    colourMenu.addItem(100, "Default", true, commonColour && *commonColour == 0);
+    colourMenu.addSeparator();
+    for (const auto& choice : colourChoices)
+        colourMenu.addItem(choice.menuId, choice.name, true,
+                           commonColour && *commonColour == choice.argb);
+
+    juce::PopupMenu menu;
+    menu.addSubMenu("Colour", colourMenu);
+    menu.addSeparator();
+    menu.addItem(1, paths.size() > 1 ? "Remove Selected" : "Remove");
+
+    juce::Component::SafePointer<PageListView> safeThis(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target != nullptr ? target : &table),
+                       [safeThis, paths] (int result)
+                       {
+                           if (safeThis == nullptr || result == 0)
+                               return;
+                           if (result == 1)
+                           {
+                               if (safeThis->onRemoveSelected)
+                                   safeThis->onRemoveSelected(paths);
+                               return;
+                           }
+                           if (result >= 100 && result < 200)
+                               safeThis->applyColourToPaths(paths, colourForMenuId(result));
+                       });
+}
+
+void PageListView::applyColourToPaths(const std::vector<juce::String>& paths,
+                                      juce::uint32 colourArgb)
+{
+    std::vector<int> changedRows;
+    for (int row = 0; row < (int) pageSnapshot.controls.size(); ++row)
+    {
+        auto& mapping = pageSnapshot.controls[(size_t) row];
+        if (std::find(paths.begin(), paths.end(), mapping.parameterPath) == paths.end())
+            continue;
+        mapping.colourArgb = colourArgb;
+        changedRows.push_back(row);
+    }
+
+    emitMappingsChanged(changedRows);
+    table.repaint();
+}
+
 void PageListView::selectedRowsChanged(int)
 {
     updateBatchControls();
+}
+
+void PageListView::returnKeyPressed(int)
+{
+    const auto rows = selectedRows();
+    if (!rows.empty())
+        beginLabel2Edit(rows.front());
+}
+
+void PageListView::beginLabel2Edit(int row)
+{
+    if (row < 0 || row >= (int) pageSnapshot.controls.size())
+        return;
+
+    table.scrollToEnsureRowIsOnscreen(row);
+    table.scrollToEnsureColumnIsOnscreen(label2Column);
+
+    juce::Component::SafePointer<PageListView> safeThis(this);
+    juce::MessageManager::callAsync([safeThis, row]
+    {
+        if (safeThis == nullptr)
+            return;
+        if (auto* editor = dynamic_cast<CommitEditor*>(
+                safeThis->table.getCellComponent(label2Column, row)))
+        {
+            editor->grabKeyboardFocus();
+            editor->selectAll();
+        }
+    });
+}
+
+bool PageListView::beginNextSelectedLabel2Edit(int row)
+{
+    const auto rows = selectedRows();
+    const bool currentRowIsSelected = std::find(rows.begin(), rows.end(), row) != rows.end();
+
+    // With a single selection, Enter walks through every following list row.
+    // Move the selection as well so repeated Enter presses can continue without
+    // requiring another mouse click.
+    if (rows.size() <= 1 || !currentRowIsSelected)
+    {
+        const int nextRow = row + 1;
+        if (nextRow >= (int) pageSnapshot.controls.size())
+            return false;
+
+        table.deselectAllRows();
+        table.selectRow(nextRow, false, true);
+        beginLabel2Edit(nextRow);
+        return true;
+    }
+
+    const auto next = std::find_if(rows.begin(), rows.end(), [row] (int candidate)
+    {
+        return candidate > row;
+    });
+    if (next == rows.end())
+        return false;
+
+    beginLabel2Edit(*next);
+    return true;
+}
+
+void PageListView::commitLabel2(int row, const juce::String& text)
+{
+    auto rows = rowsAffectedByCellEdit(row);
+    const auto firstTarget = std::find(rows.begin(), rows.end(), row);
+    if (firstTarget == rows.end())
+        return;
+
+    const auto sequence = parseLabelSequence(text);
+    std::vector<std::pair<juce::String, juce::String>> notifications;
+    int offset = 0;
+    for (auto target = firstTarget; target != rows.end(); ++target, ++offset)
+    {
+        if (*target < 0 || *target >= (int) pageSnapshot.controls.size())
+            continue;
+
+        auto& mapping = pageSnapshot.controls[(size_t) *target];
+        const auto nextLabel = labelForSequence(sequence, offset);
+        if (mapping.label2 == nextLabel)
+            continue;
+
+        mapping.label2 = nextLabel;
+        notifications.emplace_back(mapping.parameterPath, nextLabel);
+    }
+
+    for (const auto& [path, label] : notifications)
+        if (onLabel2Changed)
+            onLabel2Changed(path, label);
+
+    table.updateContent();
+    table.repaint();
 }
 
 void PageListView::updateBatchControls()
@@ -370,6 +880,7 @@ void PageListView::updateBatchControls()
     asButtonButton.setEnabled(any);
     asEncoderButton.setEnabled(any);
     asContentButton.setEnabled(any);
+    asMeterButton.setEnabled(any);
     removeSelectedButton.setEnabled(any);
 
     bool anyNumeric = false;
@@ -410,10 +921,17 @@ void PageListView::applyTypeToSelection(ControlType type)
     if (rows.empty())
         return;
 
+    std::vector<int> changedRows;
     for (const auto row : rows)
-        pageSnapshot.controls[(size_t) row].type = type;
+    {
+        auto& mapping = pageSnapshot.controls[(size_t) row];
+        if (mapping.type == ControlType::matrix)
+            continue;
+        mapping.type = type;
+        changedRows.push_back(row);
+    }
 
-    emitMappingsChanged(rows);
+    emitMappingsChanged(changedRows);
     table.updateContent();
     table.repaint();
 }
@@ -469,11 +987,16 @@ void PageListView::applyBatchThresholds()
     table.repaint();
 }
 
-void PageListView::paintRowBackground(juce::Graphics& g, int, int width, int height, bool selected)
+void PageListView::paintRowBackground(juce::Graphics& g, int row, int width, int height, bool selected)
 {
+    if (const auto* mapping = mappingAt(row); mapping && mapping->colourArgb != 0)
+    {
+        g.setColour(juce::Colour(mapping->colourArgb).darker(0.72f));
+        g.fillRect(0, 0, width, height);
+    }
     if (selected)
     {
-        g.setColour(Theme::accentDark);
+        g.setColour(Theme::accentDark.withAlpha(0.82f));
         g.fillRect(0, 0, width, height);
     }
 }
@@ -488,14 +1011,23 @@ void PageListView::paintCell(juce::Graphics& g, int row, int columnId, int width
     juce::String text;
     switch (columnId)
     {
+        case moveColumn: text = "↕"; break;
         case typeColumn:
             text = mapping->type == ControlType::encoder ? "Encoder"
-                 : mapping->type == ControlType::showContent ? "Show Content" : "Button";
+                 : mapping->type == ControlType::showContent ? "Show Content"
+                 : mapping->type == ControlType::meter ? "Meter"
+                 : mapping->type == ControlType::matrix ? "Matrix" : "Button";
             break;
         case label1Column: text = mapping->label; break;
         case statusColumn:
         {
-            if (!info)
+            if (mapping->type == ControlType::matrix)
+            {
+                text = "MATRIX";
+                g.setColour(Theme::accentDark.withAlpha(0.28f));
+                g.fillRect(0, 0, width, height);
+            }
+            else if (!info || !info->online)
                 text = "Offline";
             else if (ControlAlertPolicy::hasThresholds(*mapping) && ControlAlertPolicy::supportsThresholds(*info))
             {
@@ -506,8 +1038,14 @@ void PageListView::paintCell(juce::Graphics& g, int row, int columnId, int width
             }
             else if (mapping->type == ControlType::showContent)
             {
-                text = info->online ? "ONLINE" : "Offline";
-                g.setColour((info->online ? Theme::accentDark : Theme::outline).withAlpha(0.28f));
+                text = "ONLINE";
+                g.setColour(Theme::accentDark.withAlpha(0.28f));
+                g.fillRect(0, 0, width, height);
+            }
+            else if (mapping->type == ControlType::meter)
+            {
+                text = "METER";
+                g.setColour(Theme::accentDark.withAlpha(0.28f));
                 g.fillRect(0, 0, width, height);
             }
             else
@@ -546,6 +1084,43 @@ juce::Component* PageListView::refreshComponentForCell(int row, int columnId, bo
     }
 
     const auto path = mapping->parameterPath;
+    const auto popup = [this, row] (const juce::MouseEvent& event)
+    {
+        showRowContextMenu(row, event.eventComponent);
+    };
+
+    if (columnId == valueColumn && mapping->type == ControlType::button)
+    {
+        auto* valueButton = dynamic_cast<SmallValueButton*>(existing);
+        if (!valueButton)
+        {
+            delete existing;
+            valueButton = new SmallValueButton();
+        }
+
+        const bool supported = info && info->online
+                            && (info->kind == ParameterKind::booleanValue
+                                || info->kind == ParameterKind::trigger
+                                || info->kind == ParameterKind::enumeration
+                                || info->kind == ParameterKind::integer
+                                || info->kind == ParameterKind::real);
+        valueButton->setText(supported ? buttonText(*info) : juce::String("Offline"));
+        valueButton->setButtonEnabled(supported && info->writable && (bool) parameterWriter);
+        valueButton->setToggleState(supported && info->kind == ParameterKind::booleanValue
+                                    && static_cast<bool>(info->value));
+        valueButton->setAccent(displayAccent(*mapping, info));
+        valueButton->setPopupTooltip(supported ? "Click to operate this control" : "Control unavailable");
+        valueButton->popup = popup;
+        valueButton->activate = [this, path]
+        {
+            if (!parameterResolver || !parameterWriter) return;
+            const auto current = parameterResolver(path);
+            if (!current || !current->online || !current->writable) return;
+            const auto next = nextButtonValue(*current);
+            if (next) parameterWriter(path, *next);
+        };
+        return valueButton;
+    }
 
     if (columnId == valueColumn && mapping->type == ControlType::showContent)
     {
@@ -556,8 +1131,24 @@ juce::Component* PageListView::refreshComponentForCell(int row, int columnId, bo
             contentButton = new ContentButton();
         }
         const bool available = info && info->online && info->kind == ParameterKind::stringValue;
-        contentButton->setEnabled(available);
-        contentButton->setButtonText("Show Content");
+        // Keep text at full opacity even when the content is unavailable.
+        // Disabled JUCE buttons multiply their text alpha automatically.
+        contentButton->setEnabled(true);
+        contentButton->setInterceptsMouseClicks(available, available);
+        const auto content = available ? info->value.toString() : juce::String();
+        contentButton->setButtonText(available ? makeContentPreview(content, 12, 110) : juce::String("Offline"));
+        contentButton->setTooltip(available ? "Click to open/edit full content" : "Content unavailable");
+        contentButton->popup = popup;
+        if (const auto accent = displayAccent(*mapping, info))
+        {
+            contentButton->setColour(juce::TextButton::buttonColourId, accent->darker(0.28f));
+            contentButton->setColour(juce::TextButton::buttonOnColourId, accent->brighter(0.12f));
+        }
+        else
+        {
+            contentButton->removeColour(juce::TextButton::buttonColourId);
+            contentButton->removeColour(juce::TextButton::buttonOnColourId);
+        }
         contentButton->show = [this, path, contentButton]
         {
             if (!parameterResolver) return;
@@ -581,6 +1172,8 @@ juce::Component* PageListView::refreshComponentForCell(int row, int columnId, bo
         delete existing;
         editor = new CommitEditor();
     }
+    editor->popup = popup;
+    editor->returnPressed = {};
 
     if (columnId == label2Column)
     {
@@ -588,18 +1181,16 @@ juce::Component* PageListView::refreshComponentForCell(int row, int columnId, bo
         editor->setReadOnly(false);
         editor->setDisplayedText(mapping->label2);
         editor->setColour(juce::TextEditor::backgroundColourId, Theme::editor);
-        editor->commit = [this, path] (const juce::String& text)
-        {
-            for (auto& m : pageSnapshot.controls)
-                if (m.parameterPath == path) m.label2 = text;
-            if (onLabel2Changed) onLabel2Changed(path, text);
-        };
+        editor->commit = [this, row] (const juce::String& text) { commitLabel2(row, text); };
+        editor->returnPressed = [this, row] { return beginNextSelectedLabel2Edit(row); };
         return editor;
     }
 
     if (columnId == valueColumn)
     {
-        const bool writable = info && info->writable && info->online;
+        const bool writable = mapping->type != ControlType::meter
+                           && mapping->type != ControlType::matrix
+                           && info && info->writable && info->online;
         editor->setEnabled(true);
         editor->setReadOnly(!writable);
         editor->setDisplayedText(info ? info->formattedValue() : juce::String("-"));

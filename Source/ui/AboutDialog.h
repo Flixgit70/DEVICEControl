@@ -93,18 +93,32 @@ private:
 inline void showAboutDialog()
 {
     juce::DialogWindow::LaunchOptions options;
+
+#if JUCE_LINUX
+    options.dialogTitle = "About DEVICEControl";
+    options.dialogBackgroundColour = Theme::background;
+    options.useNativeTitleBar = true;
+#else
     options.dialogTitle = "";
     options.dialogBackgroundColour = juce::Colours::transparentBlack;
-    options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
+#endif
+
+    options.escapeKeyTriggersCloseButton = true;
     options.resizable = false;
+    options.componentToCentreAround =
+        juce::TopLevelWindow::getActiveTopLevelWindow();
     options.content.setOwned(new AboutComponent());
 
     if (auto* window = options.launchAsync())
     {
+#if JUCE_LINUX
+        window->toFront(true);
+#else
         window->setOpaque(false);
         window->setUsingNativeTitleBar(false);
         window->setDropShadowEnabled(true);
+#endif
     }
 }
 }

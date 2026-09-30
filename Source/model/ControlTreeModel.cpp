@@ -5,6 +5,34 @@ namespace er
 {
 namespace
 {
+juce::String matrixTypeName(int value)
+{
+    switch (value)
+    {
+        case 0: return "1:N";
+        case 1: return "1:1";
+        case 2: return "N:N";
+        default: return "Type " + juce::String(value);
+    }
+}
+
+juce::String addressingModeName(int value)
+{
+    switch (value)
+    {
+        case 0: return "linear";
+        case 1: return "non-linear";
+        default: return "addressing " + juce::String(value);
+    }
+}
+
+juce::String joinNumbers(const std::vector<int>& values)
+{
+    juce::StringArray text;
+    for (const auto value : values) text.add(juce::String(value));
+    return text.joinIntoString(", ");
+}
+
 struct FilterTerms
 {
     juce::StringArray include;
@@ -83,6 +111,63 @@ juce::String fullPathSearchText(const TreeEntry& entry,
     return text;
 }
 }
+
+int MatrixInfo::activeCrosspointCount() const noexcept
+{
+    int count = 0;
+    for (const auto& connection : connections) count += (int) connection.sources.size();
+    return count;
+}
+
+juce::String MatrixInfo::summary() const
+{
+    juce::String text;
+    if (type) text << matrixTypeName(*type) << " ";
+    if (addressingMode) text << addressingModeName(*addressingMode) << " ";
+
+    if (sourceCount || targetCount)
+        text << (sourceCount ? juce::String(*sourceCount) : "?") << "x"
+             << (targetCount ? juce::String(*targetCount) : "?") << " ";
+
+    if (connectionsPresent)
+        text << activeCrosspointCount() << " XP";
+
+    return text.trim();
+}
+
+juce::String MatrixInfo::details() const
+{
+    juce::String text;
+    text << "Type: " << (type ? matrixTypeName(*type) : juce::String("not reported")) << "\n";
+    text << "Addressing: " << (addressingMode ? addressingModeName(*addressingMode) : juce::String("not reported")) << "\n";
+    text << "Sources: " << (sourceCount ? juce::String(*sourceCount) : juce::String("not reported"));
+    if (sourcesPresent) text << "  [" << joinNumbers(sources) << "]";
+    text << "\nTargets: " << (targetCount ? juce::String(*targetCount) : juce::String("not reported"));
+    if (targetsPresent) text << "  [" << joinNumbers(targets) << "]";
+    text << "\nActive crosspoints: " << juce::String(activeCrosspointCount());
+
+    if (maximumTotalConnects) text << "\nMaximum total connects: " << juce::String(*maximumTotalConnects);
+    if (maximumConnectsPerTarget) text << "\nMaximum per target: " << juce::String(*maximumConnectsPerTarget);
+
+    if (connectionsPresent)
+    {
+        text << "\n\nConnections:";
+        if (connections.empty()) text << " none reported";
+        for (const auto& connection : connections)
+            text << "\nTarget " << juce::String(connection.target) << " <- "
+                 << (connection.sources.empty() ? juce::String("none") : joinNumbers(connection.sources));
+    }
+    if (labelsPresent)
+    {
+        text << "\n\nLabel sets:";
+        if (labels.empty()) text << " none reported";
+        for (const auto& label : labels)
+            text << "\n" << (label.description.isNotEmpty() ? label.description : juce::String("Label"))
+                 << ": " << label.basePath;
+    }
+    return text;
+}
+
 void ControlTreeModel::clear()
 {
     const juce::ScopedLock sl(lock);
@@ -96,6 +181,37 @@ juce::String ControlTreeModel::parentOf(const juce::String& path)
 {
     const auto dot = path.lastIndexOfChar('.');
     return dot >= 0 ? path.substring(0, dot) : juce::String();
+}
+
+bool ControlTreeModel::numericPathLess(const juce::String& a, const juce::String& b)
+{
+    auto localPath = [] (const juce::String& path)
+    {
+        if (!path.startsWithChar('@')) return path;
+        const auto dot = path.indexOfChar('.');
+        return dot < 0 ? juce::String() : path.substring(dot + 1);
+    };
+
+    juce::StringArray left, right;
+    left.addTokens(localPath(a), ".", "");
+    right.addTokens(localPath(b), ".", "");
+    const auto count = juce::jmin(left.size(), right.size());
+    for (int i = 0; i < count; ++i)
+    {
+        const auto& x = left[i];
+        const auto& y = right[i];
+        if (!x.containsOnly("0123456789") || !y.containsOnly("0123456789"))
+            return a.compareNatural(b) < 0;
+
+        // Compare decimal components without narrowing large Ember node numbers.
+        const auto nx = x.trimCharactersAtStart("0");
+        const auto ny = y.trimCharactersAtStart("0");
+        if (nx.length() != ny.length()) return nx.length() < ny.length();
+        const auto cmp = nx.compare(ny);
+        if (cmp != 0) return cmp < 0;
+    }
+    if (left.size() != right.size()) return left.size() < right.size();
+    return a.compareNatural(b) < 0;
 }
 
 bool ControlTreeModel::isSameOrDescendant(const juce::String& path, const juce::String& root)
@@ -185,7 +301,8 @@ void ControlTreeModel::upsertNode(const juce::String& path, const juce::String& 
     const juce::ScopedLock sl(lock);
     auto& e = entries[path];
     const bool changed = e.path != path || e.kind != TreeEntryKind::node
-        || e.identifier != identifier || e.description != description;
+        || (identifier.isNotEmpty() && e.identifier != identifier)
+        || (description.isNotEmpty() && e.description != description);
     e.kind = TreeEntryKind::node;
     e.path = path;
     e.parentPath = parentOf(path);
@@ -210,6 +327,90 @@ void ControlTreeModel::upsertParameter(const juce::String& path, const juce::Str
     e.description = description;
     e.writable = writable;
     e.online = online;
+    if (changed) ++revisionCounter;
+}
+
+void ControlTreeModel::upsertMatrix(const juce::String& path, const juce::String& identifier,
+                                   const juce::String& description, const MatrixInfo& update)
+{
+    if (path.isEmpty()) return;
+    const juce::ScopedLock sl(lock);
+    auto& e = entries[path];
+    bool changed = e.path != path || e.kind != TreeEntryKind::matrix;
+    e.kind = TreeEntryKind::matrix;
+    e.path = path;
+    e.parentPath = parentOf(path);
+    if (identifier.isNotEmpty() && e.identifier != identifier) { e.identifier = identifier; changed = true; }
+    if (description.isNotEmpty() && e.description != description) { e.description = description; changed = true; }
+
+    auto mergeScalar = [&changed] (auto& destination, const auto& source)
+    {
+        if (source && destination != source) { destination = source; changed = true; }
+    };
+    mergeScalar(e.matrix.type, update.type);
+    mergeScalar(e.matrix.addressingMode, update.addressingMode);
+    mergeScalar(e.matrix.targetCount, update.targetCount);
+    mergeScalar(e.matrix.sourceCount, update.sourceCount);
+    mergeScalar(e.matrix.maximumTotalConnects, update.maximumTotalConnects);
+    mergeScalar(e.matrix.maximumConnectsPerTarget, update.maximumConnectsPerTarget);
+
+    if (update.targetsPresent
+        && (!e.matrix.targetsPresent || e.matrix.targets != update.targets))
+    {
+        e.matrix.targetsPresent = true;
+        e.matrix.targets = update.targets;
+        changed = true;
+    }
+    if (update.sourcesPresent
+        && (!e.matrix.sourcesPresent || e.matrix.sources != update.sources))
+    {
+        e.matrix.sourcesPresent = true;
+        e.matrix.sources = update.sources;
+        changed = true;
+    }
+    if (update.connectionsPresent
+        && !e.matrix.connectionsPresent)
+    {
+        e.matrix.connectionsPresent = true;
+        e.matrix.connections = update.connections;
+        changed = true;
+    }
+    else if (update.connectionsPresent && update.connections.empty() && !e.matrix.connections.empty())
+    {
+        e.matrix.connections.clear();
+        changed = true;
+    }
+    else if (update.connectionsPresent)
+    {
+        // Connection notifications usually report one changed target. Merge
+        // those tallies instead of discarding every other known crosspoint.
+        for (const auto& connection : update.connections)
+        {
+            const auto found = std::find_if(e.matrix.connections.begin(), e.matrix.connections.end(),
+                                            [&connection] (const auto& existing)
+                                            {
+                                                return existing.target == connection.target;
+                                            });
+            if (found == e.matrix.connections.end())
+            {
+                e.matrix.connections.push_back(connection);
+                changed = true;
+            }
+            else if (!(*found == connection))
+            {
+                *found = connection;
+                changed = true;
+            }
+        }
+    }
+    if (update.labelsPresent
+        && (!e.matrix.labelsPresent || e.matrix.labels != update.labels))
+    {
+        e.matrix.labelsPresent = true;
+        e.matrix.labels = update.labels;
+        changed = true;
+    }
+
     if (changed) ++revisionCounter;
 }
 
@@ -264,7 +465,7 @@ bool ControlTreeModel::isDirectoryLoaded(const juce::String& path) const
     const juce::ScopedLock sl(lock);
     if (path.isEmpty()) return rootLoaded;
     const auto it = entries.find(path);
-    return it != entries.end() && it->second.kind == TreeEntryKind::node && it->second.directoryLoaded;
+    return it != entries.end() && it->second.kind != TreeEntryKind::parameter && it->second.directoryLoaded;
 }
 
 bool ControlTreeModel::isDirectoryLoading(const juce::String& path) const
@@ -272,7 +473,22 @@ bool ControlTreeModel::isDirectoryLoading(const juce::String& path) const
     const juce::ScopedLock sl(lock);
     if (path.isEmpty()) return rootLoading;
     const auto it = entries.find(path);
-    return it != entries.end() && it->second.kind == TreeEntryKind::node && it->second.directoryLoading;
+    return it != entries.end() && it->second.kind != TreeEntryKind::parameter && it->second.directoryLoading;
+}
+
+bool ControlTreeModel::isMatrix(const juce::String& path) const
+{
+    const juce::ScopedLock sl(lock);
+    const auto it = entries.find(path);
+    return it != entries.end() && it->second.kind == TreeEntryKind::matrix;
+}
+
+std::optional<TreeEntry> ControlTreeModel::find(const juce::String& path) const
+{
+    const juce::ScopedLock sl(lock);
+    const auto it = entries.find(path);
+    if (it == entries.end()) return std::nullopt;
+    return it->second;
 }
 
 std::vector<TreeEntry> ControlTreeModel::childrenOf(const juce::String& parentPath) const
@@ -285,7 +501,12 @@ std::vector<TreeEntry> ControlTreeModel::childrenOf(const juce::String& parentPa
     }
     std::sort(out.begin(), out.end(), [] (const TreeEntry& a, const TreeEntry& b)
     {
-        if (a.kind != b.kind) return a.kind == TreeEntryKind::node;
+        if (a.kind != b.kind)
+        {
+            if (a.kind == TreeEntryKind::node) return true;
+            if (b.kind == TreeEntryKind::node) return false;
+            return a.kind == TreeEntryKind::matrix;
+        }
         return a.displayName().compareNatural(b.displayName()) < 0;
     });
     return out;

@@ -156,6 +156,13 @@ bool ProviderManager::requestDirectory(const juce::String& qualifiedPath)
     return s->backend->requestDirectory(ProviderPath::localPath(qualifiedPath));
 }
 
+bool ProviderManager::refreshDirectory(const juce::String& qualifiedPath)
+{
+    auto* s = findSession(ProviderPath::providerId(qualifiedPath));
+    if (!s || !s->backend || !s->backend->isConnected()) return false;
+    return s->backend->refreshDirectory(ProviderPath::localPath(qualifiedPath));
+}
+
 void ProviderManager::startSubtreeScan(const std::vector<juce::String>& qualifiedRoots)
 {
     std::map<juce::String, std::vector<juce::String>> byProvider;
@@ -175,6 +182,15 @@ bool ProviderManager::setParameterValue(const juce::String& qualifiedPath, const
     auto* s = findSession(ProviderPath::providerId(qualifiedPath));
     return s != nullptr && s->backend != nullptr
         && s->backend->setParameterValue(ProviderPath::localPath(qualifiedPath), value);
+}
+
+bool ProviderManager::setMatrixCrosspoint(const juce::String& qualifiedPath, int target,
+                                          int source, bool connect)
+{
+    auto* s = findSession(ProviderPath::providerId(qualifiedPath));
+    return s != nullptr && s->backend != nullptr && s->backend->isConnected()
+        && s->backend->setMatrixCrosspoint(ProviderPath::localPath(qualifiedPath),
+                                           target, source, connect);
 }
 
 bool ProviderManager::anyConnected() const { return connectedCount() > 0; }
@@ -311,6 +327,21 @@ std::vector<TreeEntry> ProviderManager::treeSnapshot() const
         }
     }
     return out;
+}
+
+std::optional<TreeEntry> ProviderManager::findTreeEntry(const juce::String& qualifiedPath) const
+{
+    const auto providerId = ProviderPath::providerId(qualifiedPath);
+    const auto* s = findSession(providerId);
+    if (!s || !s->backend) return std::nullopt;
+    auto entry = s->backend->findTreeEntry(ProviderPath::localPath(qualifiedPath));
+    if (!entry) return std::nullopt;
+    const auto localParent = entry->parentPath;
+    entry->path = ProviderPath::qualify(providerId, entry->path);
+    entry->parentPath = localParent.isEmpty() ? ProviderPath::root(providerId)
+                                              : ProviderPath::qualify(providerId, localParent);
+    if (!s->backend->isConnected()) entry->online = false;
+    return entry;
 }
 
 std::uint64_t ProviderManager::combine(std::uint64_t seed, std::uint64_t value)

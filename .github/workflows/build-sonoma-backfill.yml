@@ -15,7 +15,6 @@ jobs:
   build-sonoma:
     name: macOS Sonoma ARM64
     runs-on: macos-14
-
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -23,49 +22,27 @@ jobs:
           ref: ${{ inputs.tag }}
 
       - name: Configure
-        run: |
-          cmake --preset macos-release \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+        run: cmake --preset macos-release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
 
       - name: Build
-        run: |
-          cmake --build --preset macos-release --parallel
+        run: cmake --build --preset macos-release --parallel
 
       - name: Test
-        run: |
-          ctest --preset macos-release
+        run: ctest --preset macos-release
 
       - name: Package
         shell: bash
         run: |
           set -euo pipefail
-
           VERSION="${{ inputs.tag }}"
           VERSION="${VERSION#v}"
-
           mkdir -p dist
-
-          APP="$(find build/macos-release/DEVICEControl_artefacts \
-            -maxdepth 4 \
-            -type d \
-            -name 'DEVICEControl.app' \
-            -print -quit)"
-
-          if [[ -z "${APP}" ]]; then
-            echo "DEVICEControl.app not found"
-            find build/macos-release/DEVICEControl_artefacts -maxdepth 5 -print
-            exit 1
-          fi
-
-          ditto -c -k --sequesterRsrc --keepParent \
-            "${APP}" \
-            "dist/DEVICEControl_${VERSION}_macOS_Sonoma_arm64.zip"
+          APP="$(find build/macos-release/DEVICEControl_artefacts -maxdepth 4 -type d -name 'DEVICEControl.app' -print -quit)"
+          test -n "${APP}" || { echo "DEVICEControl.app not found"; exit 1; }
+          ditto -c -k --sequesterRsrc --keepParent "${APP}" "dist/DEVICEControl_${VERSION}_macOS_Sonoma_arm64.zip"
 
       - name: Upload to existing GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ inputs.tag }}" \
-            dist/DEVICEControl_*_macOS_Sonoma_arm64.zip \
-            --clobber
+        run: gh release upload "${{ inputs.tag }}" dist/DEVICEControl_*_macOS_Sonoma_arm64.zip --clobber

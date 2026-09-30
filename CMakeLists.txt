@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(DEVICEControl VERSION 0.7.10 LANGUAGES C CXX)
+project(DEVICEControl VERSION 0.7.11 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,6 +90,7 @@ juce_add_gui_app(DEVICEControl
     PRODUCT_NAME "DEVICEControl"
     COMPANY_NAME "K2Consulting"
     BUNDLE_ID "de.k2consulting.devicecontrol"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Data/AppIcon.png"
 )
 juce_generate_juce_header(DEVICEControl)
 

@@ -43,6 +43,7 @@ private:
     juce::TextButton selectedButton { "Selected -> Button" };
     juce::TextButton selectedEncoder { "Selected -> Encoder" };
     juce::TextButton selectedContent { "Selected -> Content" };
+    juce::TextButton selectedMeter { "Selected -> Meter" };
     juce::TextButton applyButton { "Apply to Page 1" };
     juce::TextButton clearButton { "Clear Table" };
 

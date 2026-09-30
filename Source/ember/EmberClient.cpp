@@ -1,6 +1,7 @@
 #include "EmberClient.h"
 #include <array>
 #include <algorithm>
+#include <iterator>
 
 namespace er
 {
@@ -34,6 +35,7 @@ bool EmberClient::connectTo(const juce::String& newHost, int newPort)
     {
         const juce::ScopedLock sl(scanLock);
         pendingDirectories.clear();
+        pendingRefreshDirectories.clear();
         queuedDirectories.clear();
         nodeIdentifiers.clear();
         recursiveRoots.clear();
@@ -61,6 +63,7 @@ void EmberClient::disconnect()
         const juce::ScopedLock sl(scanLock);
         requestInFlight = false;
         pendingDirectories.clear();
+        pendingRefreshDirectories.clear();
         queuedDirectories.clear();
         nodeIdentifiers.clear();
         recursiveRoots.clear();
@@ -187,6 +190,18 @@ void EmberClient::visitContainer(const dom::Container& container, const Path& ba
             visitNode(*n, path);
             continue;
         }
+        if (auto* qm = dynamic_cast<const glow::GlowQualifiedMatrix*>(&item))
+        {
+            visitMatrix(*qm, oidToPath(qm->path()));
+            continue;
+        }
+        if (auto* m = dynamic_cast<const glow::GlowMatrix*>(&item))
+        {
+            auto path = basePath;
+            path.push_back(m->number());
+            visitMatrix(*m, path);
+            continue;
+        }
         if (auto* qp = dynamic_cast<const glow::GlowQualifiedParameter*>(&item))
         {
             visitParameter(*qp, oidToPath(qp->path()));
@@ -203,17 +218,96 @@ void EmberClient::visitContainer(const dom::Container& container, const Path& ba
     }
 }
 
+void EmberClient::visitMatrix(const glow::GlowMatrixBase& matrix, const Path& path)
+{
+    const auto key = pathToString(path);
+    juce::String identifier;
+    if (matrix.contains(glow::MatrixProperty::Identifier)) identifier = juce::String(matrix.identifier());
+    juce::String description;
+    if (matrix.contains(glow::MatrixProperty::Description)) description = juce::String(matrix.description());
+
+    MatrixInfo update;
+    if (matrix.contains(glow::MatrixProperty::Type))
+        update.type = matrix.type().value();
+    if (matrix.contains(glow::MatrixProperty::AddressingMode))
+        update.addressingMode = matrix.addressingMode().value();
+    if (matrix.contains(glow::MatrixProperty::TargetCount))
+        update.targetCount = matrix.targetCount();
+    if (matrix.contains(glow::MatrixProperty::SourceCount))
+        update.sourceCount = matrix.sourceCount();
+    if (matrix.contains(glow::MatrixProperty::MaximumTotalConnects))
+        update.maximumTotalConnects = matrix.maximumTotalConnects();
+    if (matrix.contains(glow::MatrixProperty::MaximumConnectsPerTarget))
+        update.maximumConnectsPerTarget = matrix.maximumConnectsPerTarget();
+
+    if (matrix.targets() != nullptr)
+    {
+        update.targetsPresent = true;
+        std::vector<const glow::GlowTarget*> targets;
+        matrix.typedTargets(std::back_inserter(targets));
+        for (const auto* target : targets)
+            if (target != nullptr) update.targets.push_back(target->number());
+    }
+
+    if (matrix.sources() != nullptr)
+    {
+        update.sourcesPresent = true;
+        std::vector<const glow::GlowSource*> sources;
+        matrix.typedSources(std::back_inserter(sources));
+        for (const auto* source : sources)
+            if (source != nullptr) update.sources.push_back(source->number());
+    }
+
+    if (matrix.connections() != nullptr)
+    {
+        update.connectionsPresent = true;
+        std::vector<const glow::GlowConnection*> connections;
+        matrix.typedConnections(std::back_inserter(connections));
+        for (const auto* connection : connections)
+        {
+            if (connection == nullptr) continue;
+            MatrixConnectionInfo info;
+            info.target = connection->target();
+            const auto sourceIds = connection->sources();
+            info.sources.assign(sourceIds.begin(), sourceIds.end());
+            info.operation = connection->operation().value();
+            info.disposition = connection->disposition().value();
+            update.connections.push_back(std::move(info));
+        }
+    }
+
+    if (matrix.labels() != nullptr)
+    {
+        update.labelsPresent = true;
+        std::vector<const glow::GlowLabel*> labels;
+        matrix.typedLabels(std::back_inserter(labels));
+        for (const auto* label : labels)
+        {
+            if (label == nullptr) continue;
+            MatrixLabelInfo info;
+            info.basePath = pathToString(oidToPath(label->basePath()));
+            info.description = juce::String(label->description());
+            update.labels.push_back(std::move(info));
+        }
+    }
+
+    treeModel.upsertMatrix(key, identifier, description, update);
+    if (auto* children = matrix.children()) visitContainer(*children, path);
+}
+
 void EmberClient::visitNode(const glow::GlowNodeBase& node, const Path& path)
 {
     const auto key = pathToString(path);
     juce::String identifier;
     if (node.contains(glow::NodeProperty::Identifier)) identifier = juce::String(node.identifier());
+    juce::String description;
+    if (node.contains(glow::NodeProperty::Description)) description = juce::String(node.description());
 
     {
         const juce::ScopedLock sl(scanLock);
         if (identifier.isNotEmpty()) nodeIdentifiers[key] = identifier;
     }
-    treeModel.upsertNode(key, identifier);
+    treeModel.upsertNode(key, identifier, description);
 
     if (auto* children = node.children()) visitContainer(*children, path);
 
@@ -275,6 +369,15 @@ bool EmberClient::requestDirectory(const juce::String& numericPath)
     return queued || treeModel.isDirectoryLoading(numericPath) || treeModel.isDirectoryLoaded(numericPath);
 }
 
+bool EmberClient::refreshDirectory(const juce::String& numericPath)
+{
+    if (!connected.load()) return false;
+    const auto path = stringToPath(numericPath);
+    const bool queued = queueDirectory(path, true);
+    requestNextDirectory();
+    return queued;
+}
+
 void EmberClient::startSubtreeScan(const std::vector<juce::String>& numericRoots)
 {
     if (!connected.load() || numericRoots.empty()) return;
@@ -328,18 +431,19 @@ bool EmberClient::pathIsInsideRecursiveSelection(const Path& path) const
     return false;
 }
 
-bool EmberClient::queueDirectory(const Path& path)
+bool EmberClient::queueDirectory(const Path& path, bool refreshOnly)
 {
     const auto key = pathToString(path);
-    if (treeModel.isDirectoryLoaded(key) || treeModel.isDirectoryLoading(key)) return false;
+    if (!refreshOnly && (treeModel.isDirectoryLoaded(key) || treeModel.isDirectoryLoading(key))) return false;
 
     {
         const juce::ScopedLock sl(scanLock);
         if (requestInFlight && pathToString(inFlightPath) == key) return false;
         if (!queuedDirectories.insert(key).second) return false;
-        pendingDirectories.push_back(path);
+        if (refreshOnly) pendingRefreshDirectories.push_back(path);
+        else pendingDirectories.push_back(path);
     }
-    treeModel.markDirectoryLoading(key, true);
+    if (!refreshOnly) treeModel.markDirectoryLoading(key, true);
     return true;
 }
 
@@ -348,22 +452,34 @@ void EmberClient::requestNextDirectory()
     if (!connected.load()) return;
     Path next;
     bool haveNext = false;
+    bool refreshOnly = false;
     bool shouldFinishScan = false;
     {
         const juce::ScopedLock sl(scanLock);
         if (requestInFlight) return;
-        if (pendingDirectories.empty())
-        {
-            shouldFinishScan = scanning.load();
-        }
-        else
+        if (!pendingDirectories.empty())
         {
             next = pendingDirectories.front();
             pendingDirectories.pop_front();
+            haveNext = true;
+        }
+        else if (scanning.load())
+        {
+            shouldFinishScan = true;
+        }
+        else if (!pendingRefreshDirectories.empty())
+        {
+            next = pendingRefreshDirectories.front();
+            pendingRefreshDirectories.pop_front();
+            refreshOnly = true;
+            haveNext = true;
+        }
+
+        if (haveNext)
+        {
             queuedDirectories.erase(pathToString(next));
             inFlightPath = next;
             requestInFlight = true;
-            haveNext = true;
         }
     }
 
@@ -388,8 +504,9 @@ void EmberClient::requestNextDirectory()
     const auto key = pathToString(next);
     if (sendDirectoryRequest(next))
     {
-        setStatus((scanning.load() ? "Collecting " : "Loading ") + (key.isEmpty() ? juce::String("root") : key)
-                  + " - " + juce::String(store.size()) + " parameters loaded");
+        if (!refreshOnly)
+            setStatus((scanning.load() ? "Collecting " : "Loading ") + (key.isEmpty() ? juce::String("root") : key)
+                      + " - " + juce::String(store.size()) + " parameters loaded");
     }
     else
     {
@@ -420,6 +537,15 @@ bool EmberClient::sendDirectoryRequest(const Path& path)
 {
     auto root = std::make_unique<glow::GlowRootElementCollection>();
     if (path.empty()) new glow::GlowCommand(root.get(), glow::CommandType::GetDirectory, glow::DirFieldMask::All);
+    else if (treeModel.isMatrix(pathToString(path)))
+    {
+        // A matrix GetDirectory is encoded as a command inside the qualified
+        // matrix's Children collection. It is not a QualifiedNode request.
+        auto* matrix = new glow::GlowQualifiedMatrix(root.get(), pathToOid(path));
+        auto* children = matrix->children();
+        children->insert(children->end(), new glow::GlowCommand(glow::CommandType::GetDirectory,
+                                                                 glow::DirFieldMask::All));
+    }
     else
     {
         auto* node = new glow::GlowQualifiedNode(root.get(), pathToOid(path));
@@ -498,6 +624,38 @@ bool EmberClient::setParameterValue(const juce::String& numericPath, const juce:
         case ParameterKind::integer: parameter->setValue((long) (juce::int64) newValue); break;
         default: return false;
     }
+    return sendGlowTree(*root);
+}
+
+bool EmberClient::setMatrixCrosspoint(const juce::String& numericPath, int target, int source,
+                                      bool connect)
+{
+    if (!connected.load()) return false;
+    const auto path = stringToPath(numericPath);
+    if (path.empty() || target < 0 || source < 0 || !treeModel.isMatrix(numericPath)) return false;
+
+    auto root = std::make_unique<glow::GlowRootElementCollection>();
+    auto* matrix = new glow::GlowQualifiedMatrix(root.get(), pathToOid(path));
+    auto* connections = matrix->connections();
+    auto* connection = new glow::GlowConnection(target);
+    const Path sources { source };
+    connection->setSources(pathToOid(sources));
+    if (!connect)
+    {
+        connection->setOperation(glow::ConnectionOperation::Disconnect);
+    }
+    else
+    {
+        // 1:N and 1:1 targets accept one source. Absolute also replaces a
+        // previous source in one atomic Ember+ update when another XY cell is
+        // clicked. N:N matrices keep the additive Connect operation.
+        const auto matrixEntry = treeModel.find(numericPath);
+        const bool singleSourcePerTarget = matrixEntry && matrixEntry->matrix.type
+                                        && (*matrixEntry->matrix.type == 0 || *matrixEntry->matrix.type == 1);
+        connection->setOperation(singleSourcePerTarget ? glow::ConnectionOperation::Absolute
+                                                       : glow::ConnectionOperation::Connect);
+    }
+    connections->insert(connections->end(), connection);
     return sendGlowTree(*root);
 }
 

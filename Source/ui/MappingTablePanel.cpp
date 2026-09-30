@@ -22,11 +22,13 @@ public:
         addItem("Button", 1);
         addItem("Encoder", 2);
         addItem("Show Content", 3);
+        addItem("Meter", 4);
         onChange = [this]
         {
             if (!changed) return;
             if (getSelectedId() == 2) changed(ControlType::encoder);
             else if (getSelectedId() == 3) changed(ControlType::showContent);
+            else if (getSelectedId() == 4) changed(ControlType::meter);
             else changed(ControlType::button);
         };
     }
@@ -93,9 +95,16 @@ MappingTablePanel::MappingTablePanel(MappingDraft& draftToUse) : draft(draftToUs
             if (auto* r = rowAt(table.getSelectedRow(i))) { r->type = ControlType::showContent; r->enabled = true; }
         refresh();
     };
+    selectedMeter.onClick = [this]
+    {
+        for (int i = 0; i < table.getNumSelectedRows(); ++i)
+            if (auto* r = rowAt(table.getSelectedRow(i))) { r->type = ControlType::meter; r->enabled = true; }
+        refresh();
+    };
     addAndMakeVisible(selectedButton);
     addAndMakeVisible(selectedEncoder);
     addAndMakeVisible(selectedContent);
+    addAndMakeVisible(selectedMeter);
 
     applyButton.onClick = [this] { if (onApply) onApply(); };
     clearButton.onClick = [this]
@@ -149,11 +158,13 @@ void MappingTablePanel::resized()
     buttons.removeFromRight(6);
     applyButton.setBounds(buttons.removeFromRight(136).reduced(0, 1));
     buttons.removeFromRight(12);
-    selectedContent.setBounds(buttons.removeFromRight(152).reduced(0, 1));
+    selectedMeter.setBounds(buttons.removeFromRight(132).reduced(0, 1));
     buttons.removeFromRight(6);
-    selectedEncoder.setBounds(buttons.removeFromRight(142).reduced(0, 1));
+    selectedContent.setBounds(buttons.removeFromRight(140).reduced(0, 1));
     buttons.removeFromRight(6);
-    selectedButton.setBounds(buttons.removeFromRight(136).reduced(0, 1));
+    selectedEncoder.setBounds(buttons.removeFromRight(132).reduced(0, 1));
+    buttons.removeFromRight(6);
+    selectedButton.setBounds(buttons.removeFromRight(126).reduced(0, 1));
     r.removeFromTop(4);
     info.setBounds(r.removeFromBottom(24));
     r.removeFromBottom(4);
@@ -282,7 +293,8 @@ juce::Component* MappingTablePanel::refreshComponentForCell(int rowNumber, int c
         auto* c = dynamic_cast<TypeEditor*>(existing);
         if (!c) { delete existing; c = new TypeEditor(); }
         c->setSelectedId(row->type == ControlType::encoder ? 2
-                       : row->type == ControlType::showContent ? 3 : 1, juce::dontSendNotification);
+                       : row->type == ControlType::showContent ? 3
+                       : row->type == ControlType::meter ? 4 : 1, juce::dontSendNotification);
         c->changed = [this, path] (ControlType type)
         {
             const auto i = rowForPath(path); if (auto* r = rowAt(i)) r->type = type;

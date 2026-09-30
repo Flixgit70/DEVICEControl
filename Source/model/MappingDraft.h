@@ -43,6 +43,7 @@ public:
     void setEnabledForPaths(const std::vector<juce::String>& paths, bool enabled);
     bool allEnabled() const;
     void removeRowsForPage(int page);
+    void followPageOrder(int page, const PageModel& source);
     bool setLabel2ForPath(const juce::String& path, const juce::String& label2);
     bool setTypeForPath(const juce::String& path, ControlType type);
     bool setThresholdsForPath(const juce::String& path,

@@ -22,6 +22,20 @@ juce::StringArray splitTreePath(juce::String treePath)
     return parts;
 }
 
+juce::String thresholdField(bool enabled, double value)
+{
+    if (!enabled) return {};
+    return juce::String(value, 12).trimCharactersAtEnd("0").trimCharactersAtEnd(".");
+}
+
+juce::String controlTypeField(ControlType type)
+{
+    return type == ControlType::showContent ? "show_content"
+         : type == ControlType::encoder ? "encoder"
+         : type == ControlType::meter ? "meter"
+         : type == ControlType::matrix ? "matrix" : "button";
+}
+
 
 juce::String normaliseColumnName(juce::String text)
 {
@@ -55,7 +69,26 @@ juce::String CsvService::plainField(juce::String s)
             .replace("\r", " ");
 }
 
-bool CsvService::exportParameters(const juce::File& file, const std::vector<ParameterInfo>& params, juce::String& error)
+bool CsvService::exportPageMappings(const juce::File& file, const PageModel& page, int pageNumber,
+                                     std::function<std::optional<ParameterInfo>(const juce::String&)> resolver,
+                                     juce::String& error)
+{
+    std::vector<ParameterInfo> params;
+    params.reserve(page.controls.size());
+    for (const auto& mapping : page.controls)
+    {
+        auto p = resolver ? resolver(mapping.parameterPath).value_or(ParameterInfo{}) : ParameterInfo{};
+        if (p.path.isEmpty()) p.path = mapping.parameterPath;
+        if (p.localPath.isEmpty()) p.localPath = ProviderPath::localPath(p.path);
+        if (p.providerId.isEmpty()) p.providerId = ProviderPath::providerId(p.path);
+        if (p.treePath.isEmpty()) p.treePath = mapping.label;
+        params.push_back(std::move(p));
+    }
+    return exportParameters(file, params, error, &page.controls, pageNumber);
+}
+
+bool CsvService::exportParameters(const juce::File& file, const std::vector<ParameterInfo>& params,
+                                   juce::String& error, const std::vector<ControlMapping>* mappings, int pageNumber)
 {
     int maxBranchDepth = 0;
     std::vector<juce::StringArray> branches;
@@ -102,13 +135,24 @@ bool CsvService::exportParameters(const juce::File& file, const std::vector<Para
         cols.add(plainField(p.minimum.toString())); cols.add(plainField(p.maximum.toString()));
         cols.add(juce::String(p.factor)); cols.add(p.writable ? "true" : "false"); cols.add(p.online ? "true" : "false");
         cols.add(plainField(p.enumEntries.joinIntoString("|")));
-        const auto label1 = p.fullTreeLabel();
-        const auto label2 = p.description.isNotEmpty() && p.description != label1 ? p.description : juce::String();
+        const auto* mapping = mappings && row < mappings->size() ? &(*mappings)[row] : nullptr;
+        const auto label1 = mapping ? mapping->label : p.fullTreeLabel();
+        const auto label2 = mapping ? mapping->label2
+                                     : (p.description.isNotEmpty() && p.description != label1 ? p.description : juce::String());
         const auto defaultControl = p.kind == ParameterKind::stringValue ? juce::String("show_content")
                                   : (p.kind == ParameterKind::booleanValue || p.kind == ParameterKind::trigger)
                                         ? juce::String("button") : juce::String("encoder");
-        cols.add("false"); cols.add(defaultControl); cols.add("1"); cols.add(plainField(label1)); cols.add(plainField(label2)); cols.add(juce::String());
-        cols.add(juce::String()); cols.add(juce::String()); cols.add(juce::String()); cols.add(juce::String());
+        cols.add(mapping ? "true" : "false");
+        cols.add(mapping ? controlTypeField(mapping->type) : defaultControl);
+        cols.add(juce::String(mapping ? pageNumber : 1));
+        cols.add(plainField(label1)); cols.add(plainField(label2));
+        cols.add(mapping && mapping->colourArgb != 0
+                     ? "#" + juce::String::toHexString((juce::int64) mapping->colourArgb).paddedLeft('0', 8).toUpperCase()
+                     : juce::String());
+        cols.add(mapping ? thresholdField(mapping->orangeAboveThresholdEnabled, mapping->orangeAboveThreshold) : juce::String());
+        cols.add(mapping ? thresholdField(mapping->redAboveThresholdEnabled, mapping->redAboveThreshold) : juce::String());
+        cols.add(mapping ? thresholdField(mapping->orangeBelowThresholdEnabled, mapping->orangeBelowThreshold) : juce::String());
+        cols.add(mapping ? thresholdField(mapping->redBelowThresholdEnabled, mapping->redBelowThreshold) : juce::String());
         lines.add(cols.joinIntoString(";"));
     }
     if (!file.replaceWithText(lines.joinIntoString("\n"))) { error = "Could not write " + file.getFullPathName(); return false; }
@@ -238,6 +282,10 @@ bool CsvService::importMappings(const juce::File& file, PageSet& pages, juce::St
         if (controlText.equalsIgnoreCase("encoder")) m.type = ControlType::encoder;
         else if (controlText.equalsIgnoreCase("show_content") || controlText.equalsIgnoreCase("show content")
                  || controlText.equalsIgnoreCase("content")) m.type = ControlType::showContent;
+        else if (controlText.equalsIgnoreCase("meter") || controlText.equalsIgnoreCase("ppm"))
+            m.type = ControlType::meter;
+        else if (controlText.equalsIgnoreCase("matrix"))
+            m.type = ControlType::matrix;
         else m.type = ControlType::button;
         pages.pages()[(size_t)(page-1)].controls.push_back(m);
     }

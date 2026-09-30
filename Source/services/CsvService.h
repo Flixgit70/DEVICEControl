@@ -8,7 +8,11 @@ namespace er
 class CsvService
 {
 public:
-    static bool exportParameters(const juce::File& file, const std::vector<ParameterInfo>& params, juce::String& error);
+    static bool exportParameters(const juce::File& file, const std::vector<ParameterInfo>& params, juce::String& error,
+                                 const std::vector<ControlMapping>* mappings = nullptr, int pageNumber = 1);
+    static bool exportPageMappings(const juce::File& file, const PageModel& page, int pageNumber,
+                                   std::function<std::optional<ParameterInfo>(const juce::String&)> resolver,
+                                   juce::String& error);
     static bool importMappings(const juce::File& file, PageSet& pages, juce::String& error);
 private:
     static juce::String plainField(juce::String s);

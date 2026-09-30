@@ -25,8 +25,11 @@ public:
     bool connectTo(const juce::String& host, int port) override;
     void disconnect() override;
     bool requestDirectory(const juce::String& numericPath) override;
+    bool refreshDirectory(const juce::String& numericPath) override;
     void startSubtreeScan(const std::vector<juce::String>& numericRoots) override;
     bool setParameterValue(const juce::String& numericPath, const juce::var& newValue) override;
+    bool setMatrixCrosspoint(const juce::String& numericPath, int target, int source,
+                             bool connect) override;
 
     bool isConnected() const noexcept override { return connected.load(); }
     bool isScanning() const noexcept override { return scanning.load(); }
@@ -49,11 +52,12 @@ private:
     void handleDecodedRoot(const libember::dom::Node* root);
     void visitContainer(const libember::dom::Container& container, const Path& basePath);
     void visitNode(const libember::glow::GlowNodeBase& node, const Path& path);
+    void visitMatrix(const libember::glow::GlowMatrixBase& matrix, const Path& path);
     void visitParameter(const libember::glow::GlowParameterBase& parameter, const Path& path);
     ParameterInfo makeParameterInfo(const libember::glow::GlowParameterBase& parameter, const Path& path) const;
     juce::String makeTreePath(const Path& parameterPath, const juce::String& parameterName) const;
 
-    bool queueDirectory(const Path& path);
+    bool queueDirectory(const Path& path, bool refreshOnly = false);
     void requestNextDirectory();
     void finishRequest(const Path& path);
     bool sendDirectoryRequest(const Path& path);
@@ -86,6 +90,7 @@ private:
     ControlTreeModel treeModel;
 
     std::deque<Path> pendingDirectories;
+    std::deque<Path> pendingRefreshDirectories;
     std::set<juce::String> queuedDirectories;
     std::map<juce::String, juce::String> nodeIdentifiers;
     std::vector<Path> recursiveRoots;

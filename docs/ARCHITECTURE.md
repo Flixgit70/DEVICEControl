@@ -6,7 +6,7 @@ DEVICEControl is a protocol-neutral control surface. Ember+ is the first provide
 
 ```
 UI
-  MainComponent / ControlTreeBrowser / MappingTable / Pages
+  MainComponent / ControlTreeBrowser / Pages / Matrix / Meter controls
         |
 Controllers + services
   MappingController / AppSettingsService / CSV / Project
@@ -36,7 +36,7 @@ ProviderFactory
 
 ### Ember
 
-`providers/ember/EmberProvider` adapts the existing stable `EmberClient` to `IProviderBackend`. The EmberClient implementation and S101/Glow behaviour were not changed for 0.5.0.
+`providers/ember/EmberProvider` adapts the existing stable `EmberClient` to `IProviderBackend`. The EmberClient provides the current S101/Glow transport used by the Ember provider.
 
 ### Future providers
 
@@ -44,4 +44,4 @@ A DirectOut provider should implement `IProviderBackend` and be registered in `P
 
 ## Compatibility wrappers
 
-The 0.5.0 patch can be unpacked over an existing 0.4.x source tree. Old filenames (`MultiProviderBackend`, `EmberTreeModel`, `EmberTreeBrowser`, `IControlBackend`) therefore remain as very small aliases/wrappers. New code must use the 0.5.0 names.
+Legacy filenames (`MultiProviderBackend`, `EmberTreeModel`, `EmberTreeBrowser`, `IControlBackend`) remain as small compatibility aliases/wrappers. New code should use the current provider-neutral names.

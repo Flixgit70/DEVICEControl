@@ -1,6 +1,6 @@
 # DEVICEControl CI / build system
 
-DEVICEControl 0.7.0 is repository-agnostic. GitHub Actions, a local SVN/Jenkins
+DEVICEControl 0.7.11 is repository-agnostic. GitHub Actions, a local SVN/Jenkins
 checkout, or a normal developer workspace all invoke the same CMake presets.
 
 ## Pinned dependencies

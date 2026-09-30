@@ -13,10 +13,16 @@ public:
     void disconnect() override { client.disconnect(); }
 
     bool requestDirectory(const juce::String& localPath) override { return client.requestDirectory(localPath); }
+    bool refreshDirectory(const juce::String& localPath) override { return client.refreshDirectory(localPath); }
     void startSubtreeScan(const std::vector<juce::String>& localRoots) override { client.startSubtreeScan(localRoots); }
     bool setParameterValue(const juce::String& localPath, const juce::var& value) override
     {
         return client.setParameterValue(localPath, value);
+    }
+    bool setMatrixCrosspoint(const juce::String& localPath, int target, int source,
+                             bool connect) override
+    {
+        return client.setMatrixCrosspoint(localPath, target, source, connect);
     }
 
     bool isConnected() const noexcept override { return client.isConnected(); }
@@ -25,6 +31,10 @@ public:
     int discoveredParameterCount() const override { return client.discoveredParameterCount(); }
 
     std::vector<TreeEntry> treeSnapshot() const override { return client.tree().snapshot(); }
+    std::optional<TreeEntry> findTreeEntry(const juce::String& localPath) const override
+    {
+        return client.tree().find(localPath);
+    }
     bool isDirectoryLoaded(const juce::String& localPath) const override { return client.tree().isDirectoryLoaded(localPath); }
     bool isDirectoryLoading(const juce::String& localPath) const override { return client.tree().isDirectoryLoading(localPath); }
     std::uint64_t treeRevision() const override { return client.tree().revision(); }

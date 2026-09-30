@@ -28,6 +28,8 @@ int MappingController::addControlsToPage(const std::vector<juce::String>& paths,
             mapping.label = existing->label;
             mapping.label2 = existing->label2;
             mapping.colourArgb = existing->colourArgb;
+            mapping.tileWidth = existing->tileWidth;
+            mapping.tileHeight = existing->tileHeight;
             mapping.orangeAboveThresholdEnabled = existing->orangeAboveThresholdEnabled;
             mapping.orangeAboveThreshold = existing->orangeAboveThreshold;
             mapping.redAboveThresholdEnabled = existing->redAboveThresholdEnabled;

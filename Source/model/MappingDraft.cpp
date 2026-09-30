@@ -136,6 +136,27 @@ void MappingDraft::setAllEnabled(bool enabled)
         row.enabled = enabled;
 }
 
+void MappingDraft::followPageOrder(int page, const PageModel& source)
+{
+    std::map<juce::String, size_t> order;
+    for (size_t i = 0; i < source.controls.size(); ++i)
+        order[source.controls[i].parameterPath] = i;
+
+    std::vector<MappingDraftRow> forPage;
+    for (const auto& row : rowList)
+        if (row.page == page) forPage.push_back(row);
+    std::stable_sort(forPage.begin(), forPage.end(), [&] (const auto& a, const auto& b)
+    {
+        const auto ai = order.find(a.path), bi = order.find(b.path);
+        return (ai == order.end() ? order.size() : ai->second)
+             < (bi == order.end() ? order.size() : bi->second);
+    });
+
+    size_t next = 0;
+    for (auto& row : rowList)
+        if (row.page == page) row = std::move(forPage[next++]);
+}
+
 void MappingDraft::setEnabledForPaths(const std::vector<juce::String>& paths, bool enabled)
 {
     for (auto& row : rowList)
@@ -225,10 +246,15 @@ void MappingDraft::applyTo(PageSet& pages) const
     // is re-applied. Labels/type/page are authoritative in the draft, but a
     // right-click colour choice should not be lost simply by pressing Apply.
     std::map<juce::String, juce::uint32> existingColours;
+    std::map<juce::String, std::pair<int, int>> existingSizes;
     for (const auto& page : pages.pages())
         for (const auto& control : page.controls)
+        {
             if (control.colourArgb != 0)
                 existingColours[control.parameterPath] = control.colourArgb;
+            if (control.tileWidth > 0 || control.tileHeight > 0)
+                existingSizes[control.parameterPath] = { control.tileWidth, control.tileHeight };
+        }
 
     // Rows are authoritative for their own parameter path: re-applying after
     // changing a page must move the control rather than duplicate it.
@@ -268,6 +294,11 @@ void MappingDraft::applyTo(PageSet& pages) const
         {
             const auto it = existingColours.find(row.path);
             if (it != existingColours.end()) mapping.colourArgb = it->second;
+        }
+        if (const auto sizeIt = existingSizes.find(row.path); sizeIt != existingSizes.end())
+        {
+            mapping.tileWidth = sizeIt->second.first;
+            mapping.tileHeight = sizeIt->second.second;
         }
         pages.pages()[(size_t) pageIndex].controls.push_back(std::move(mapping));
     }
