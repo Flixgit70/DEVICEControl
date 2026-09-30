@@ -1,0 +1,71 @@
+name: Build Sonoma for existing release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, e.g. v0.7.10"
+        required: true
+        default: "v0.7.10"
+
+permissions:
+  contents: write
+
+jobs:
+  build-sonoma:
+    name: macOS Sonoma ARM64
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Configure
+        run: |
+          cmake --preset macos-release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+
+      - name: Build
+        run: |
+          cmake --build --preset macos-release --parallel
+
+      - name: Test
+        run: |
+          ctest --preset macos-release
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ inputs.tag }}"
+          VERSION="${VERSION#v}"
+
+          mkdir -p dist
+
+          APP="$(find build/macos-release/DEVICEControl_artefacts \
+            -maxdepth 4 \
+            -type d \
+            -name 'DEVICEControl.app' \
+            -print -quit)"
+
+          if [[ -z "${APP}" ]]; then
+            echo "DEVICEControl.app not found"
+            find build/macos-release/DEVICEControl_artefacts -maxdepth 5 -print
+            exit 1
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${APP}" \
+            "dist/DEVICEControl_${VERSION}_macOS_Sonoma_arm64.zip"
+
+      - name: Upload to existing GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.tag }}" \
+            dist/DEVICEControl_*_macOS_Sonoma_arm64.zip \
+            --clobber
