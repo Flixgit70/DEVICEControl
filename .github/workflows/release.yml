@@ -1,0 +1,238 @@
+name: DEVICEControl Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: devicecontrol-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: Verify tag and project version
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "This workflow must run from a version tag such as v0.7.10."
+            exit 1
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Release version: ${VERSION}"
+
+          if ! grep -Eq "project\(DEVICEControl[[:space:]]+VERSION[[:space:]]+${VERSION}([[:space:]]|\))" CMakeLists.txt; then
+            echo "ERROR: CMakeLists.txt version does not match tag ${GITHUB_REF_NAME}."
+            echo "Expected: project(DEVICEControl VERSION ${VERSION} ...)"
+            grep -n "project(DEVICEControl" CMakeLists.txt || true
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: verify-version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-15
+            preset: macos-release
+            artifact_dir: build/macos-release/DEVICEControl_artefacts
+            package_name: macOS_arm64
+
+          - name: Windows x64
+            os: windows-2022
+            preset: windows-release
+            artifact_dir: build/windows-release/DEVICEControl_artefacts
+            package_name: Windows_x64
+
+          - name: Linux x64
+            os: ubuntu-24.04
+            preset: linux-release
+            artifact_dir: build/linux-release/DEVICEControl_artefacts
+            package_name: Linux_x64
+
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            preset: linux-release
+            artifact_dir: build/linux-release/DEVICEControl_artefacts
+            package_name: Linux_arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./scripts/ci/install_linux_deps.sh
+
+      - name: Show toolchain
+        shell: bash
+        if: runner.os != 'Windows'
+        run: |
+          uname -a
+          cmake --version
+          git --version
+
+      - name: Show toolchain
+        shell: pwsh
+        if: runner.os == 'Windows'
+        run: |
+          cmake --version
+          git --version
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+
+          APP="$(find "${{ matrix.artifact_dir }}" -maxdepth 3 -type d -name 'DEVICEControl.app' -print -quit)"
+          if [[ -z "${APP}" ]]; then
+            echo "DEVICEControl.app not found."
+            find "${{ matrix.artifact_dir }}" -maxdepth 4 -print
+            exit 1
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${APP}" \
+            "dist/DEVICEControl_${VERSION}_${{ matrix.package_name }}.zip"
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+
+          BIN="$(find "${{ matrix.artifact_dir }}" -maxdepth 3 -type f -name 'DEVICEControl' -perm -111 -print -quit)"
+          if [[ -z "${BIN}" ]]; then
+            echo "DEVICEControl executable not found."
+            find "${{ matrix.artifact_dir }}" -maxdepth 4 -print
+            exit 1
+          fi
+
+          TMP="dist/DEVICEControl_${VERSION}_${{ matrix.package_name }}"
+          mkdir -p "${TMP}"
+          cp "${BIN}" "${TMP}/DEVICEControl"
+          cp README.md "${TMP}/" || true
+          cp THIRD_PARTY_NOTICES.md "${TMP}/" || true
+
+          (
+            cd dist
+            cmake -E tar cf "DEVICEControl_${VERSION}_${{ matrix.package_name }}.zip" \
+              --format=zip               "DEVICEControl_${VERSION}_${{ matrix.package_name }}"
+          )
+          rm -rf "${TMP}"
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          $exe = Get-ChildItem -Path "${{ matrix.artifact_dir }}" -Filter "DEVICEControl.exe" -File -Recurse |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            Write-Host "DEVICEControl.exe not found."
+            Get-ChildItem -Path "${{ matrix.artifact_dir }}" -Recurse
+            exit 1
+          }
+
+          $folderName = "DEVICEControl_${version}_${{ matrix.package_name }}"
+          $tmp = Join-Path "dist" $folderName
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+
+          Copy-Item $exe.FullName (Join-Path $tmp "DEVICEControl.exe")
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" $tmp
+          }
+          if (Test-Path "THIRD_PARTY_NOTICES.md") {
+            Copy-Item "THIRD_PARTY_NOTICES.md" $tmp
+          }
+
+          Compress-Archive `
+            -Path $tmp `
+            -DestinationPath "dist/DEVICEControl_${version}_${{ matrix.package_name }}.zip" `
+            -Force
+
+          Remove-Item -Recurse -Force $tmp
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.package_name }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/*.zip \
+            dist/SHA256SUMS.txt \
+            --verify-tag \
+            --title "DEVICEControl ${VERSION}" \
+            --generate-notes
