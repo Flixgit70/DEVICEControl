@@ -1,0 +1,34 @@
+# CMake / JUCE build output
+build/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# IDE/editor
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiler / generated artifacts
+*.o
+*.obj
+*.d
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.app/
+
+# Local logs / temporary files
+*.log
+*.tmp
+*.bak

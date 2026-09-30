@@ -1,0 +1,68 @@
+name: DEVICEControl CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devicecontrol-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-24.04
+            preset: linux-release
+            artifact_dir: build/linux-release/DEVICEControl_artefacts
+          - name: macOS Apple Silicon
+            os: macos-14
+            preset: macos-release
+            artifact_dir: build/macos-release/DEVICEControl_artefacts
+          - name: Windows x64
+            os: windows-2022
+            preset: windows-release
+            artifact_dir: build/windows-release/DEVICEControl_artefacts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./scripts/ci/install_linux_deps.sh
+
+      - name: Show toolchain
+        run: |
+          cmake --version
+          git --version
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Upload build artifacts
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEVICEControl-${{ matrix.preset }}
+          path: ${{ matrix.artifact_dir }}
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,4 @@
+provider_id;provider;path;branch_1;branch_2;branch_3;branch_4;enabled;control;page;label;label2;colour;orange_above_threshold;red_above_threshold;orange_below_threshold;red_below_threshold
+provider-ravenna;Ravenna A;1.2.3;Ravenna A;ravenna;Routing;Inputs;true;encoder;1;Ravenna A/ravenna/Routing/Inputs;Input Level;#FF2F8FD8;80;95;20;10
+provider-ravenna;Ravenna A;1.2.4;Ravenna A;ravenna;Routing;Outputs;true;button;1;Ravenna A/ravenna/Routing/Outputs;Output Enable;#FFFF941F;;;;
+provider-console;Lawo;1.3.1;Lawo;Mixer;Aux;Mute;true;button;2;Lawo/Mixer/Aux/Mute;Auxiliary;#FF38A86B;;;;
