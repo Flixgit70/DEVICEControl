@@ -24,6 +24,7 @@ public:
     void applyPendingFullRebuildIfSafe();
     void expandLoadedBelow(const std::vector<juce::String>& roots);
     void collapseAllBelow(const std::vector<juce::String>& roots);
+    void collapseAll();
 
     int selectedBranchCount() const;
     int selectedMatrixCount() const;

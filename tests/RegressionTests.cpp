@@ -479,6 +479,16 @@ void testLazyTreeModel()
     const auto exclusionOnly = er::ControlTreeModel::buildFilter(exclusionSnapshot, "-Buffer");
     expect(exclusionOnly.matches.count("6.1.1") == 1 && exclusionOnly.matches.count("6.1.2.1") == 0,
            "A pure exclusion filter must show loaded candidates except those containing the excluded token");
+
+    const auto matchesInOpenBranches = er::ControlTreeModel::parameterPathsMatchingFilterInOpenBranches(
+        exclusionSnapshot, "Ravenna Input Gain", { "6", "6.1" });
+    expect(matchesInOpenBranches.size() == 1 && matchesInOpenBranches[0] == "6.1.1",
+           "Select Matches must ignore parameters below a collapsed branch");
+
+    const auto matchesAfterOpeningNestedBranch = er::ControlTreeModel::parameterPathsMatchingFilterInOpenBranches(
+        exclusionSnapshot, "Ravenna Input Gain", { "6", "6.1", "6.1.2" });
+    expect(matchesAfterOpeningNestedBranch.size() == 2,
+           "Select Matches must include a matching parameter after its complete parent branch is open");
 }
 
 void testMappingDraft()

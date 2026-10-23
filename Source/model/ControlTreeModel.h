@@ -129,6 +129,10 @@ public:
     static TreeFilterResult buildFilter(const std::vector<TreeEntry>& entries, const juce::String& query);
     static std::vector<juce::String> parameterPathsMatchingFilter(const std::vector<TreeEntry>& entries,
                                                                    const juce::String& query);
+    static std::vector<juce::String> parameterPathsMatchingFilterInOpenBranches(
+        const std::vector<TreeEntry>& entries,
+        const juce::String& query,
+        const std::set<juce::String>& openNodePaths);
     static std::set<juce::String> nodePathsUnderRoots(const std::vector<TreeEntry>& entries,
                                                        const std::vector<juce::String>& roots);
 

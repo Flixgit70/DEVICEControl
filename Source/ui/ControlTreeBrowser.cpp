@@ -138,6 +138,8 @@ public:
             else owner.openPaths.erase(entry.path);
             if (isNowOpen && entry.kind == TreeEntryKind::node)
                 owner.itemOpened(entry.path);
+            owner.updateFilterActionState();
+            owner.updateSelectionText();
         }
     }
 
@@ -247,7 +249,7 @@ ControlTreeBrowser::ControlTreeBrowser()
     };
     collapseAllButton.onClick = [this]
     {
-        collapseAllBelow(selectedPaths());
+        collapseAll();
     };
     addAndMakeVisible(addButton);
     addAndMakeVisible(addEncoder);
@@ -501,9 +503,7 @@ void ControlTreeBrowser::addChildren(juce::TreeViewItem& parent, const juce::Str
             added = true;
         }
 
-        const bool autoOpenForFilter = filterText.isNotEmpty()
-                                    && childEntryIndices.find(e.path) != childEntryIndices.end();
-        if (openPaths.count(e.path) != 0 || autoOpenForFilter)
+        if (openPaths.count(e.path) != 0)
         {
             item->ensureChildren();
             item->setOpen(true);
@@ -526,6 +526,12 @@ void ControlTreeBrowser::collapseAllBelow(const std::vector<juce::String>& roots
     if (roots.empty()) return;
     const auto nodes = ControlTreeModel::nodePathsUnderRoots(entries, roots);
     for (const auto& path : nodes) openPaths.erase(path);
+    rebuildTree();
+}
+
+void ControlTreeBrowser::collapseAll()
+{
+    openPaths.clear();
     rebuildTree();
 }
 
@@ -683,7 +689,7 @@ juce::String ControlTreeBrowser::selectedParameterPath() const
 
 std::vector<juce::String> ControlTreeBrowser::filteredParameterPaths() const
 {
-    return ControlTreeModel::parameterPathsMatchingFilter(entries, filterText);
+    return ControlTreeModel::parameterPathsMatchingFilterInOpenBranches(entries, filterText, openPaths);
 }
 
 void ControlTreeBrowser::selectFilterMatches()
@@ -765,7 +771,7 @@ void ControlTreeBrowser::updateSelectionText()
     {
         const auto parameterMatches = filteredParameterPaths();
         text << "  |  " << juce::String((int) filterMatchPaths.size()) << " filter matches / "
-             << juce::String((int) parameterMatches.size()) << " parameters";
+             << juce::String((int) parameterMatches.size()) << " visible parameters";
     }
     selectionInfo.setText(text, juce::dontSendNotification);
 }

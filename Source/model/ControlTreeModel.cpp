@@ -273,6 +273,42 @@ std::vector<juce::String> ControlTreeModel::parameterPathsMatchingFilter(const s
     return result;
 }
 
+std::vector<juce::String> ControlTreeModel::parameterPathsMatchingFilterInOpenBranches(
+    const std::vector<TreeEntry>& sourceEntries,
+    const juce::String& query,
+    const std::set<juce::String>& openNodePaths)
+{
+    const auto matches = parameterPathsMatchingFilter(sourceEntries, query);
+    const auto index = buildEntryIndex(sourceEntries);
+    std::vector<juce::String> visibleMatches;
+    visibleMatches.reserve(matches.size());
+
+    for (const auto& path : matches)
+    {
+        const auto entry = index.find(path);
+        if (entry == index.end()) continue;
+
+        auto parentPath = entry->second->parentPath;
+        bool visible = true;
+        while (parentPath.isNotEmpty())
+        {
+            const auto parent = index.find(parentPath);
+            if (parent == index.end()
+                || parent->second->kind != TreeEntryKind::node
+                || openNodePaths.count(parentPath) == 0)
+            {
+                visible = false;
+                break;
+            }
+            parentPath = parent->second->parentPath;
+        }
+
+        if (visible) visibleMatches.push_back(path);
+    }
+
+    return visibleMatches;
+}
+
 std::set<juce::String> ControlTreeModel::nodePathsUnderRoots(const std::vector<TreeEntry>& sourceEntries,
                                                            const std::vector<juce::String>& roots)
 {
