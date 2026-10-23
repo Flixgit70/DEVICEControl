@@ -25,11 +25,14 @@ public:
     std::function<void(const MatrixControlData&)> onMatrixConfigurationChanged;
 
 private:
-    struct AxisLeaf
+    struct AxisItem
     {
-        int number = 0;
+        bool folder = false;
+        juce::String id;
+        int number = -1;
         juce::String label;
-        juce::String folderPath;
+        int depth = 0;
+        bool expanded = true;
     };
 
     void applyControlColour() override;
@@ -39,6 +42,10 @@ private:
     int sourceHeaderIndexAt(juce::Point<float>) const;
     void selectTarget(int index, const juce::ModifierKeys&);
     void selectSource(int index, const juce::ModifierKeys&);
+    void toggleFolder(bool targetsAxis, const juce::String& id);
+    void showFolderMenu(bool targetsAxis, const AxisItem& folder, juce::Component* target);
+    void promptRenameFolder(bool targetsAxis, const juce::String& id,
+                            const juce::String& currentName);
     void showAxisMenu(bool targetsAxis, juce::Component* target);
     void commitMatrixConfiguration();
     void rebuildLeaves();
@@ -46,8 +53,8 @@ private:
     void scrollBarMoved(juce::ScrollBar*, double) override;
     juce::Rectangle<int> gridBounds() const;
     static void flattenAxis(const std::vector<MatrixAxisNode>& nodes,
-                            const juce::String& parentPath,
-                            std::vector<AxisLeaf>& leaves,
+                            int depth,
+                            std::vector<AxisItem>& items,
                             const std::map<int, juce::String>& liveLabels);
 
     juce::Label title;
@@ -61,8 +68,8 @@ private:
     std::map<int, juce::String> targetLabels;
     std::map<int, juce::String> sourceLabels;
     std::map<int, std::set<int>> connections;
-    std::vector<AxisLeaf> targets;
-    std::vector<AxisLeaf> sources;
+    std::vector<AxisItem> targets;
+    std::vector<AxisItem> sources;
     std::set<int> selectedTargets;
     std::set<int> selectedSources;
     int targetSelectionAnchor = -1;

@@ -55,6 +55,7 @@ private:
     std::vector<juce::String> selectedPaths() const;
     std::vector<juce::String> filteredParameterPaths() const;
     void selectFilterMatches();
+    void deselectAll();
     void showFilterActionsMenu();
     void updateFilterActionState();
     void updateSelectionText();
@@ -72,6 +73,7 @@ private:
     juce::TextEditor filterEditor;
     juce::TextButton clearFilterButton { "X" };
     juce::TextButton selectMatchesButton { "Select Matches" };
+    juce::TextButton deselectAllButton { "Deselect All" };
     juce::TextButton matchActionsButton { "Matches..." };
     juce::Label treeNameHeader { "TreeNameHeader", "Parameter" };
     juce::Label treeValueHeader { "TreeValueHeader", "Value / Matrix" };

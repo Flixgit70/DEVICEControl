@@ -280,6 +280,16 @@ void testProjectRoundTrip()
     source.pages()[1].controls[0].orangeBelowThreshold = 20.0;
     source.pages()[1].controls[0].redBelowThresholdEnabled = true;
     source.pages()[1].controls[0].redBelowThreshold = 10.0;
+    er::ControlMapping matrix;
+    matrix.parameterPath = "@provider-a.5.1.1.1";
+    matrix.label = "Routing Matrix";
+    matrix.type = er::ControlType::matrix;
+    auto targetFolder = er::MatrixAxisNode::createFolder("Main Outputs");
+    targetFolder.expanded = false;
+    targetFolder.children.push_back(er::MatrixAxisNode::signal(101, "Output 101"));
+    matrix.matrix.targets.push_back(std::move(targetFolder));
+    matrix.matrix.sources.push_back(er::MatrixAxisNode::signal(201, "Input 201"));
+    source.pages()[2].controls.push_back(std::move(matrix));
     source.addPage();
     source.pages()[3].name = "Custom";
 
@@ -298,6 +308,7 @@ void testProjectRoundTrip()
     expect(loaded.pages()[3].name == "Custom", "Custom page name must round-trip");
     expect(loaded.pages()[0].controls.size() == 1, "Button mapping must round-trip");
     expect(loaded.pages()[1].controls.size() == 1, "Encoder mapping must round-trip");
+    expect(loaded.pages()[2].controls.size() == 1, "Matrix mapping must round-trip");
     if (!loaded.pages()[1].controls.empty())
     {
         expect(loaded.pages()[1].controls[0].type == er::ControlType::encoder, "Encoder type must round-trip");
@@ -312,6 +323,20 @@ void testProjectRoundTrip()
         expect(loaded.pages()[1].controls[0].redBelowThresholdEnabled && loaded.pages()[1].controls[0].redBelowThreshold == 10.0,
                "Lower red threshold must round-trip in project files");
         expect(loaded.pages()[1].viewMode == er::PageViewMode::list, "Page list view mode must round-trip in project files");
+    }
+    if (!loaded.pages()[2].controls.empty())
+    {
+        const auto& loadedMatrix = loaded.pages()[2].controls[0].matrix;
+        expect(loadedMatrix.targets.size() == 1 && loadedMatrix.targets[0].folder,
+               "Matrix target folder must round-trip in project files");
+        if (!loadedMatrix.targets.empty())
+        {
+            expect(!loadedMatrix.targets[0].expanded,
+                   "Collapsed Matrix folder state must round-trip in project files");
+            expect(loadedMatrix.targets[0].children.size() == 1
+                   && loadedMatrix.targets[0].children[0].signalNumber == 101,
+                   "Signals inside a collapsed Matrix folder must remain stored");
+        }
     }
 
     file.deleteFile();

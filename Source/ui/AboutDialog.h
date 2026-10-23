@@ -9,8 +9,11 @@ class AboutComponent final : public juce::Component
 public:
     AboutComponent()
     {
-        setSize(500, 430);
+        setSize(500, 460);
         setOpaque(false);
+        addAndMakeVisible(manualLink);
+        manualLink.setTooltip("Open the DEVICEControl User Manual in your web browser");
+        manualLink.setColour(juce::HyperlinkButton::textColourId, Theme::accentBlue);
         addAndMakeVisible(okButton);
         okButton.onClick = [this]
         {
@@ -53,7 +56,7 @@ public:
         g.drawText("K2Consulting",
                    40, 168, getWidth() - 80, 22, juce::Justification::centred);
 
-        const auto panel = juce::Rectangle<float>(42.0f, 198.0f, (float) getWidth() - 84.0f, 150.0f);
+        const auto panel = juce::Rectangle<float>(42.0f, 225.0f, (float) getWidth() - 84.0f, 150.0f);
         g.setColour(Theme::panel);
         g.fillRoundedRectangle(panel, 8.0f);
         g.setColour(Theme::outline);
@@ -61,7 +64,7 @@ public:
 
         g.setColour(Theme::accentBlue);
         g.setFont(juce::FontOptions(13.5f, juce::Font::bold));
-        g.drawText("Based on / third-party components", 58, 210, getWidth() - 116, 22,
+        g.drawText("Based on / third-party components", 58, 237, getWidth() - 116, 22,
                    juce::Justification::centredLeft);
 
         g.setColour(Theme::text);
@@ -72,21 +75,27 @@ public:
             "libember - Glow / Ember+ data model\n"
             "libs101 - S101 transport framing\n"
             "CMake - build system";
-        g.drawFittedText(libraries, 58, 236, getWidth() - 116, 96,
+        g.drawFittedText(libraries, 58, 263, getWidth() - 116, 96,
                          juce::Justification::topLeft, 6, 1.0f);
 
         g.setColour(Theme::textDim);
         g.setFont(juce::FontOptions(10.8f));
         g.drawText("Third-party components are used under their respective licenses.",
-                   42, 354, getWidth() - 84, 20, juce::Justification::centred);
+                   42, 381, getWidth() - 84, 20, juce::Justification::centred);
     }
 
     void resized() override
     {
+        manualLink.setBounds(95, 192, getWidth() - 190, 25);
         okButton.setBounds(getWidth() / 2 - 44, getHeight() - 45, 88, 26);
     }
 
 private:
+    juce::HyperlinkButton manualLink
+    {
+        "Open DEVICEControl User Manual",
+        juce::URL("https://nc-5789769951021120545.nextcloud-ionos.com/index.php/s/9cEbms7PTgeHr6d")
+    };
     juce::TextButton okButton { "OK" };
 };
 

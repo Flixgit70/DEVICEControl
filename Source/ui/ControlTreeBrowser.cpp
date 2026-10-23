@@ -203,8 +203,12 @@ ControlTreeBrowser::ControlTreeBrowser()
     addAndMakeVisible(clearFilterButton);
 
     selectMatchesButton.onClick = [this] { selectFilterMatches(); };
+    deselectAllButton.setEnabled(false);
+    deselectAllButton.setTooltip("Clear all selections in the tree, including hidden filter matches");
+    deselectAllButton.onClick = [this] { deselectAll(); };
     matchActionsButton.onClick = [this] { showFilterActionsMenu(); };
     addAndMakeVisible(selectMatchesButton);
+    addAndMakeVisible(deselectAllButton);
     addAndMakeVisible(matchActionsButton);
 
     treeNameHeader.setFont(juce::FontOptions(10.5f).withStyle("Bold"));
@@ -353,8 +357,12 @@ void ControlTreeBrowser::resized()
     filterEditor.setBounds(filterRow.reduced(0, 1));
 
     auto matchRow = r.removeFromTop(32);
-    selectMatchesButton.setBounds(matchRow.removeFromLeft((matchRow.getWidth() - 6) * 2 / 3));
-    matchRow.removeFromLeft(6);
+    constexpr int matchButtonGap = 6;
+    const int matchButtonSpace = juce::jmax(0, matchRow.getWidth() - 2 * matchButtonGap);
+    selectMatchesButton.setBounds(matchRow.removeFromLeft(matchButtonSpace * 42 / 100));
+    matchRow.removeFromLeft(matchButtonGap);
+    deselectAllButton.setBounds(matchRow.removeFromLeft(matchButtonSpace * 34 / 100));
+    matchRow.removeFromLeft(matchButtonGap);
     matchActionsButton.setBounds(matchRow);
     r.removeFromTop(5);
 
@@ -689,6 +697,15 @@ void ControlTreeBrowser::selectFilterMatches()
     rebuildTree();
 }
 
+void ControlTreeBrowser::deselectAll()
+{
+    if (selectedPathSet.empty())
+        return;
+
+    selectedPathSet.clear();
+    rebuildTree();
+}
+
 void ControlTreeBrowser::showFilterActionsMenu()
 {
     const auto matches = filteredParameterPaths();
@@ -726,6 +743,8 @@ void ControlTreeBrowser::updateFilterActionState()
 
 void ControlTreeBrowser::updateSelectionText()
 {
+    deselectAllButton.setEnabled(!selectedPathSet.empty());
+
     juce::String text;
     if (selectedPathSet.empty()) text = "No selection";
     else if (selectedPathSet.size() == 1)

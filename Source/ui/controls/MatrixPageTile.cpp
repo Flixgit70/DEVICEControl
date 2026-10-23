@@ -49,6 +49,48 @@ bool renameAxisNode(std::vector<MatrixAxisNode>& nodes, const juce::String& id,
     return false;
 }
 
+bool toggleAxisFolder(std::vector<MatrixAxisNode>& nodes, const juce::String& id)
+{
+    for (auto& node : nodes)
+    {
+        if (node.folder && node.id == id)
+        {
+            node.expanded = !node.expanded;
+            return true;
+        }
+        if (node.folder && toggleAxisFolder(node.children, id)) return true;
+    }
+    return false;
+}
+
+void collectAxisSignals(const std::vector<MatrixAxisNode>& nodes, std::set<int>& signals)
+{
+    for (const auto& node : nodes)
+    {
+        if (node.folder) collectAxisSignals(node.children, signals);
+        else signals.insert(node.signalNumber);
+    }
+}
+
+void drawDisclosureTriangle(juce::Graphics& g, juce::Rectangle<float> bounds, bool expanded)
+{
+    juce::Path triangle;
+    if (expanded)
+    {
+        triangle.startNewSubPath(bounds.getX(), bounds.getY());
+        triangle.lineTo(bounds.getRight(), bounds.getY());
+        triangle.lineTo(bounds.getCentreX(), bounds.getBottom());
+    }
+    else
+    {
+        triangle.startNewSubPath(bounds.getX(), bounds.getY());
+        triangle.lineTo(bounds.getRight(), bounds.getCentreY());
+        triangle.lineTo(bounds.getX(), bounds.getBottom());
+    }
+    triangle.closeSubPath();
+    g.fillPath(triangle);
+}
+
 bool groupAtCommonLevel(std::vector<MatrixAxisNode>& nodes,
                         const std::set<juce::String>& selected,
                         const juce::String& folderName)
@@ -211,7 +253,7 @@ private:
         bool mightContainSubItems() override { return node.folder; }
         juce::String getUniqueName() const override { return node.id; }
         void paintItem(juce::Graphics& g, int width, int height) override;
-        void itemOpennessChanged(bool open) override { node.expanded = open; }
+        void itemOpennessChanged(bool open) override;
         void itemClicked(const juce::MouseEvent& event) override;
         MatrixAxisNode& node;
     private:
@@ -249,11 +291,18 @@ private:
 
         void rebuild()
         {
+            rebuilding = true;
             detachRoot();
             root = std::make_unique<RootItem>();
             addNodes(*root, axis());
             setRootItem(root.get());
             root->setOpen(true);
+            rebuilding = false;
+        }
+
+        void opennessChanged()
+        {
+            if (!rebuilding && owner.onChanged) owner.onChanged(owner.data);
         }
 
         void showMenu(NodeItem& clicked, juce::Component* target)
@@ -312,6 +361,7 @@ private:
         }
         MatrixAxisEditor& owner;
         bool targetsAxis = false;
+        bool rebuilding = false;
         std::unique_ptr<RootItem> root;
         friend class NodeItem;
     };
@@ -356,9 +406,27 @@ private:
 
     void promptRename(bool targetAxis, const juce::String& id)
     {
+        auto& axis = targetAxis ? data.targets : data.sources;
+        juce::String currentName = "Folder";
+        std::function<bool(const std::vector<MatrixAxisNode>&)> findName;
+        findName = [&] (const std::vector<MatrixAxisNode>& nodes)
+        {
+            for (const auto& node : nodes)
+            {
+                if (node.id == id)
+                {
+                    currentName = node.name;
+                    return true;
+                }
+                if (node.folder && findName(node.children)) return true;
+            }
+            return false;
+        };
+        findName(axis);
+
         auto* alert = new juce::AlertWindow("Rename Matrix folder", "Enter the new folder name:",
                                             juce::MessageBoxIconType::NoIcon);
-        alert->addTextEditor("name", "Folder");
+        alert->addTextEditor("name", currentName);
         alert->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
         alert->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
         juce::Component::SafePointer<MatrixAxisEditor> safeThis(this);
@@ -423,6 +491,13 @@ void MatrixAxisEditor::NodeItem::paintItem(juce::Graphics& g, int width, int hei
 void MatrixAxisEditor::NodeItem::itemClicked(const juce::MouseEvent& event)
 {
     if (event.mods.isPopupMenu()) owner.showMenu(*this, event.eventComponent);
+}
+
+void MatrixAxisEditor::NodeItem::itemOpennessChanged(bool open)
+{
+    if (node.expanded == open) return;
+    node.expanded = open;
+    owner.opennessChanged();
 }
 
 class MatrixEditorWindow final : public juce::DocumentWindow
@@ -549,23 +624,24 @@ void MatrixPageTile::refreshMatrix(const TreeEntry& newEntry,
 }
 
 void MatrixPageTile::flattenAxis(const std::vector<MatrixAxisNode>& nodes,
-                                 const juce::String& parentPath,
-                                 std::vector<AxisLeaf>& leaves,
+                                 int depth,
+                                 std::vector<AxisItem>& items,
                                  const std::map<int, juce::String>& liveLabels)
 {
     for (const auto& node : nodes)
     {
         if (node.folder)
         {
-            const auto path = parentPath.isEmpty() ? node.name : parentPath + " / " + node.name;
-            flattenAxis(node.children, path, leaves, liveLabels);
+            items.push_back({ true, node.id, -1, node.name, depth, node.expanded });
+            if (node.expanded)
+                flattenAxis(node.children, depth + 1, items, liveLabels);
         }
         else
         {
             const auto found = liveLabels.find(node.signalNumber);
-            leaves.push_back({ node.signalNumber,
-                               found != liveLabels.end() && found->second.isNotEmpty() ? found->second : node.name,
-                               parentPath });
+            items.push_back({ false, node.id, node.signalNumber,
+                              found != liveLabels.end() && found->second.isNotEmpty() ? found->second : node.name,
+                              depth, true });
         }
     }
 }
@@ -574,18 +650,24 @@ void MatrixPageTile::rebuildLeaves()
 {
     targets.clear();
     sources.clear();
-    flattenAxis(controlMapping.matrix.targets, {}, targets, targetLabels);
-    flattenAxis(controlMapping.matrix.sources, {}, sources, sourceLabels);
+    flattenAxis(controlMapping.matrix.targets, 0, targets, targetLabels);
+    flattenAxis(controlMapping.matrix.sources, 0, sources, sourceLabels);
     std::set<int> availableTargets;
     std::set<int> availableSources;
-    for (const auto& target : targets) availableTargets.insert(target.number);
-    for (const auto& source : sources) availableSources.insert(source.number);
+    collectAxisSignals(controlMapping.matrix.targets, availableTargets);
+    collectAxisSignals(controlMapping.matrix.sources, availableSources);
     for (auto it = selectedTargets.begin(); it != selectedTargets.end();)
         if (availableTargets.count(*it) == 0) it = selectedTargets.erase(it);
         else ++it;
     for (auto it = selectedSources.begin(); it != selectedSources.end();)
         if (availableSources.count(*it) == 0) it = selectedSources.erase(it);
         else ++it;
+    const auto visibleTargetSignals = (int) std::count_if(targets.begin(), targets.end(),
+                                                          [] (const AxisItem& item) { return !item.folder; });
+    const auto visibleSourceSignals = (int) std::count_if(sources.begin(), sources.end(),
+                                                          [] (const AxisItem& item) { return !item.folder; });
+    if (targetSelectionAnchor >= visibleTargetSignals) targetSelectionAnchor = -1;
+    if (sourceSelectionAnchor >= visibleSourceSignals) sourceSelectionAnchor = -1;
     updateScrollRanges();
     repaint();
 }
@@ -623,6 +705,23 @@ void MatrixPageTile::paint(juce::Graphics& g)
     {
         const int x = body.getX() + column * cellWidth - (int) xOffset;
         const auto& target = targets[(size_t) column];
+        if (target.folder)
+        {
+            g.setColour(Theme::accentDark.withAlpha(0.72f));
+            g.fillRect(x, matrix.getY(), cellWidth, columnHeaderHeight);
+            g.setColour(Theme::accentBlue);
+            drawDisclosureTriangle(g,
+                                   { (float) x + 6.0f + juce::jmin(target.depth, 2) * 5.0f,
+                                     (float) matrix.getY() + 7.0f, 8.0f, 8.0f },
+                                   target.expanded);
+            g.setColour(Theme::textBright);
+            g.setFont(juce::FontOptions(9.5f).withStyle("Bold"));
+            g.drawFittedText(target.label, x + 4, matrix.getY() + 19, cellWidth - 8,
+                             columnHeaderHeight - 22, juce::Justification::centred, 3);
+            g.setColour(Theme::outline);
+            g.drawRect(x, matrix.getY(), cellWidth, columnHeaderHeight);
+            continue;
+        }
         if (selectedTargets.count(target.number) != 0)
         {
             g.setColour(Theme::accentBlue.withAlpha(0.48f));
@@ -630,8 +729,7 @@ void MatrixPageTile::paint(juce::Graphics& g)
         }
         g.setColour(Theme::textBright);
         g.setFont(juce::FontOptions(9.5f).withStyle("Bold"));
-        const auto text = target.folderPath.isNotEmpty() ? target.folderPath + " / " + target.label : target.label;
-        g.drawFittedText(text, x + 3, matrix.getY() + 2, cellWidth - 6, 46,
+        g.drawFittedText(target.label, x + 3, matrix.getY() + 2, cellWidth - 6, 46,
                          juce::Justification::centred, 3);
         g.setColour(Theme::textDim);
         g.drawText(juce::String(target.number), x + 2, matrix.getY() + 48, cellWidth - 4, 15,
@@ -642,24 +740,53 @@ void MatrixPageTile::paint(juce::Graphics& g)
     {
         const int y = body.getY() + row * cellHeight - (int) yOffset;
         const auto& source = sources[(size_t) row];
-        const auto text = source.folderPath.isNotEmpty() ? source.folderPath + " / " + source.label : source.label;
-        if (selectedSources.count(source.number) != 0)
+        if (source.folder)
+        {
+            g.setColour(Theme::accentDark.withAlpha(0.72f));
+            g.fillRect(matrix.getX(), y, rowHeaderWidth, cellHeight);
+            g.setColour(Theme::accentBlue);
+            const auto displayDepth = juce::jmin(source.depth, 6);
+            const float triangleX = (float) matrix.getX() + 7.0f + displayDepth * 12.0f;
+            drawDisclosureTriangle(g, { triangleX, (float) y + 8.0f, 8.0f, 8.0f }, source.expanded);
+            g.setColour(Theme::textBright);
+            g.setFont(juce::FontOptions(10.0f).withStyle("Bold"));
+            const int textX = (int) triangleX + 14;
+            g.drawFittedText(source.label, textX, y, matrix.getX() + rowHeaderWidth - textX - 5,
+                             cellHeight, juce::Justification::centredLeft, 1);
+            g.setColour(Theme::outline);
+            g.drawRect(matrix.getX(), y, rowHeaderWidth, cellHeight);
+        }
+        else if (selectedSources.count(source.number) != 0)
         {
             g.setColour(Theme::accentBlue.withAlpha(0.48f));
             g.fillRect(matrix.getX(), y, rowHeaderWidth, cellHeight);
         }
-        g.setColour(Theme::textBright);
-        g.setFont(juce::FontOptions(10.0f));
-        g.drawFittedText(text, matrix.getX() + 5, y, rowHeaderWidth - 76, cellHeight,
-                         juce::Justification::centredLeft, 1);
-        g.setColour(Theme::textDim);
-        g.drawText(juce::String(source.number), matrix.getX() + rowHeaderWidth - 70, y, 65, cellHeight,
-                   juce::Justification::centredRight, true);
+        if (!source.folder)
+        {
+            const int textX = matrix.getX() + 5 + juce::jmin(source.depth, 6) * 12;
+            g.setColour(Theme::textBright);
+            g.setFont(juce::FontOptions(10.0f));
+            g.drawFittedText(source.label, textX, y,
+                             matrix.getX() + rowHeaderWidth - 76 - textX, cellHeight,
+                             juce::Justification::centredLeft, 1);
+            g.setColour(Theme::textDim);
+            g.drawText(juce::String(source.number), matrix.getX() + rowHeaderWidth - 70, y, 65, cellHeight,
+                       juce::Justification::centredRight, true);
+        }
 
         for (int column = firstColumn; column < lastColumn; ++column)
         {
             const int x = body.getX() + column * cellWidth - (int) xOffset;
-            const auto target = targets[(size_t) column].number;
+            const auto& targetItem = targets[(size_t) column];
+            if (source.folder || targetItem.folder)
+            {
+                g.setColour(Theme::panelRaised.darker(0.18f));
+                g.fillRect(x, y, cellWidth, cellHeight);
+                g.setColour(Theme::outline);
+                g.drawRect(x, y, cellWidth, cellHeight);
+                continue;
+            }
+            const auto target = targetItem.number;
             const auto active = connections.find(target);
             const bool connected = active != connections.end() && active->second.count(source.number) != 0;
             g.setColour((row % 2) == 0 ? Theme::panel : Theme::panelRaised);
@@ -674,11 +801,20 @@ void MatrixPageTile::paint(juce::Graphics& g)
             }
         }
     }
-    if (targets.empty() || sources.empty())
+    const bool hasVisibleTargets = std::any_of(targets.begin(), targets.end(),
+                                               [] (const AxisItem& item) { return !item.folder; });
+    const bool hasVisibleSources = std::any_of(sources.begin(), sources.end(),
+                                               [] (const AxisItem& item) { return !item.folder; });
+    if (!hasVisibleTargets || !hasVisibleSources)
     {
         g.setColour(Theme::textDim);
         g.setFont(juce::FontOptions(14.0f));
-        g.drawFittedText("Select signals in the full Matrix or use Configure Axes...",
+        const bool hasFolders = std::any_of(targets.begin(), targets.end(),
+                                            [] (const AxisItem& item) { return item.folder; })
+                             || std::any_of(sources.begin(), sources.end(),
+                                            [] (const AxisItem& item) { return item.folder; });
+        g.drawFittedText(hasFolders ? "Open a folder to show its Matrix signals."
+                                    : "Select signals in the full Matrix or use Configure Axes...",
                          body.reduced(20), juce::Justification::centred, 2);
     }
     g.setColour(Theme::outline);
@@ -754,23 +890,93 @@ int MatrixPageTile::sourceHeaderIndexAt(juce::Point<float> position) const
 void MatrixPageTile::selectTarget(int index, const juce::ModifierKeys& modifiers)
 {
     if (index < 0 || index >= (int) targets.size()) return;
+    if (targets[(size_t) index].folder) return;
     if (modifiers.isPopupMenu() && selectedTargets.count(targets[(size_t) index].number) != 0) return;
     std::vector<int> numbers;
     numbers.reserve(targets.size());
-    for (const auto& target : targets) numbers.push_back(target.number);
-    selectAxisLeaf(selectedTargets, numbers, index, targetSelectionAnchor, modifiers);
+    int signalIndex = -1;
+    for (int itemIndex = 0; itemIndex < (int) targets.size(); ++itemIndex)
+    {
+        const auto& target = targets[(size_t) itemIndex];
+        if (target.folder) continue;
+        if (itemIndex == index) signalIndex = (int) numbers.size();
+        numbers.push_back(target.number);
+    }
+    selectAxisLeaf(selectedTargets, numbers, signalIndex, targetSelectionAnchor, modifiers);
     repaint(gridBounds());
 }
 
 void MatrixPageTile::selectSource(int index, const juce::ModifierKeys& modifiers)
 {
     if (index < 0 || index >= (int) sources.size()) return;
+    if (sources[(size_t) index].folder) return;
     if (modifiers.isPopupMenu() && selectedSources.count(sources[(size_t) index].number) != 0) return;
     std::vector<int> numbers;
     numbers.reserve(sources.size());
-    for (const auto& source : sources) numbers.push_back(source.number);
-    selectAxisLeaf(selectedSources, numbers, index, sourceSelectionAnchor, modifiers);
+    int signalIndex = -1;
+    for (int itemIndex = 0; itemIndex < (int) sources.size(); ++itemIndex)
+    {
+        const auto& source = sources[(size_t) itemIndex];
+        if (source.folder) continue;
+        if (itemIndex == index) signalIndex = (int) numbers.size();
+        numbers.push_back(source.number);
+    }
+    selectAxisLeaf(selectedSources, numbers, signalIndex, sourceSelectionAnchor, modifiers);
     repaint(gridBounds());
+}
+
+void MatrixPageTile::toggleFolder(bool targetsAxis, const juce::String& id)
+{
+    auto& nodes = targetsAxis ? controlMapping.matrix.targets : controlMapping.matrix.sources;
+    if (!toggleAxisFolder(nodes, id)) return;
+    rebuildLeaves();
+    if (onMatrixConfigurationChanged)
+        onMatrixConfigurationChanged(controlMapping.matrix);
+}
+
+void MatrixPageTile::showFolderMenu(bool targetsAxis, const AxisItem& folder,
+                                    juce::Component* target)
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, folder.expanded ? "Close folder" : "Open folder");
+    menu.addItem(2, "Rename folder...");
+
+    juce::Component::SafePointer<MatrixPageTile> safeThis(this);
+    const auto folderId = folder.id;
+    const auto folderName = folder.label;
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(target),
+                       [safeThis, targetsAxis, folderId, folderName] (int result)
+                       {
+                           if (safeThis == nullptr || result == 0) return;
+                           if (result == 1)
+                               safeThis->toggleFolder(targetsAxis, folderId);
+                           else if (result == 2)
+                               safeThis->promptRenameFolder(targetsAxis, folderId, folderName);
+                       });
+}
+
+void MatrixPageTile::promptRenameFolder(bool targetsAxis, const juce::String& id,
+                                        const juce::String& currentName)
+{
+    auto* alert = new juce::AlertWindow("Rename Matrix folder", "Enter the new folder name:",
+                                        juce::MessageBoxIconType::NoIcon);
+    alert->addTextEditor("name", currentName);
+    alert->addButton("Rename", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    juce::Component::SafePointer<MatrixPageTile> safeThis(this);
+    alert->enterModalState(true, juce::ModalCallbackFunction::create(
+        [safeThis, alert, targetsAxis, id, currentName] (int result)
+        {
+            if (safeThis == nullptr || result != 1) return;
+            const auto name = alert->getTextEditorContents("name").trim();
+            if (name.isEmpty() || name == currentName) return;
+
+            auto& nodes = targetsAxis ? safeThis->controlMapping.matrix.targets
+                                      : safeThis->controlMapping.matrix.sources;
+            if (renameAxisNode(nodes, id, name))
+                safeThis->commitMatrixConfiguration();
+        }), true);
 }
 
 void MatrixPageTile::commitMatrixConfiguration()
@@ -831,12 +1037,28 @@ void MatrixPageTile::mouseDown(const juce::MouseEvent& event)
 {
     if (const auto targetIndex = targetHeaderIndexAt(event.position); targetIndex >= 0)
     {
+        if (targets[(size_t) targetIndex].folder)
+        {
+            if (event.mods.isPopupMenu())
+                showFolderMenu(true, targets[(size_t) targetIndex], event.eventComponent);
+            else
+                toggleFolder(true, targets[(size_t) targetIndex].id);
+            return;
+        }
         selectTarget(targetIndex, event.mods);
         if (event.mods.isPopupMenu()) showAxisMenu(true, event.eventComponent);
         return;
     }
     if (const auto sourceIndex = sourceHeaderIndexAt(event.position); sourceIndex >= 0)
     {
+        if (sources[(size_t) sourceIndex].folder)
+        {
+            if (event.mods.isPopupMenu())
+                showFolderMenu(false, sources[(size_t) sourceIndex], event.eventComponent);
+            else
+                toggleFolder(false, sources[(size_t) sourceIndex].id);
+            return;
+        }
         selectSource(sourceIndex, event.mods);
         if (event.mods.isPopupMenu()) showAxisMenu(false, event.eventComponent);
         return;
@@ -847,6 +1069,7 @@ void MatrixPageTile::mouseDown(const juce::MouseEvent& event)
     const int column = (int) ((event.x - body.getX() + horizontalScroll.getCurrentRangeStart()) / cellWidth);
     const int row = (int) ((event.y - body.getY() + verticalScroll.getCurrentRangeStart()) / cellHeight);
     if (column < 0 || column >= (int) targets.size() || row < 0 || row >= (int) sources.size()) return;
+    if (targets[(size_t) column].folder || sources[(size_t) row].folder) return;
     const auto target = targets[(size_t) column].number;
     const auto source = sources[(size_t) row].number;
     const auto active = connections.find(target);
