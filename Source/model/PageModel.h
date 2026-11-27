@@ -5,6 +5,7 @@ namespace er
 {
 enum class ControlType { button, encoder, showContent, meter, matrix };
 enum class PageViewMode { tiles, list };
+enum class MappingIdentityMode { pathAddress, fullNamePath };
 
 /** One entry on a page Matrix axis. Folders may contain signals and more
     folders recursively; signalNumber is used only when folder is false. */
@@ -50,6 +51,10 @@ struct ControlMapping
     double redBelowThreshold = 0.0;
 
     MatrixControlData matrix;
+
+    // Stable human-readable Ember branch used when a project opts into name-based remapping.
+    // Kept at the end to preserve existing aggregate initializers.
+    juce::String stableNamePath;
 };
 
 struct PageModel
@@ -82,7 +87,10 @@ public:
     bool removePage(int index);
     bool movePage(int fromIndex, int toIndex);
     bool renamePage(int index, const juce::String& name);
+    MappingIdentityMode mappingIdentityMode() const noexcept { return identityMode; }
+    void setMappingIdentityMode(MappingIdentityMode mode) noexcept { identityMode = mode; }
 private:
     std::vector<PageModel> pageList;
+    MappingIdentityMode identityMode = MappingIdentityMode::pathAddress;
 };
 }

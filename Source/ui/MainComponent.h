@@ -11,6 +11,7 @@
 #include "ControlWorkspace.h"
 #include "BrandTitle.h"
 #include "MatrixWindow.h"
+#include "../cli/CliTransport.h"
 #include <set>
 
 namespace er
@@ -58,6 +59,8 @@ private:
     void rebuildWorkspace();
     void scheduleWorkspaceRebuild();
     void refreshMappedParametersFor(const std::set<juce::String>& providerIds);
+    void scanProvidersForNameMappings(const std::set<juce::String>& providerIds);
+    void captureAndResolveNameMappings(bool captureMissingIdentity = false);
     void pollVisibleMeters();
     void addMappings(const std::vector<juce::String>& paths, ControlType type);
     void addMatrixControl(const juce::String& path);
@@ -76,6 +79,8 @@ private:
     void setProviderPanelVisible(bool visible);
     void openMatrixWindow(const juce::String& qualifiedPath);
     void loadMatrixLabels(const juce::String& qualifiedPath);
+    CliSnapshot makeCliSnapshot() const;
+    CliCommandResult handleCliCommand(const juce::String& line, CliCommandModel::Mode mode);
 
     ProviderManager providerManager;
     PageSet pageSet;
@@ -98,6 +103,8 @@ private:
     juce::TextButton connectEnabledButton { "Connect Enabled" };
     juce::TextButton disconnectAllButton { "Disconnect All" };
     juce::Label providerSummary;
+    juce::Label mappingIdentityLabel;
+    juce::ComboBox mappingIdentityMode;
     juce::TextButton saveButton { "Save" };
     juce::TextButton loadButton { "Load" };
 
@@ -116,6 +123,7 @@ private:
 
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::unique_ptr<MatrixWindow> matrixWindow;
+    std::unique_ptr<CliServer> cliServer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

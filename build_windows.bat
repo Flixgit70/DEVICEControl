@@ -13,4 +13,8 @@ if errorlevel 1 exit /b %errorlevel%
 ctest --preset windows-release
 if errorlevel 1 exit /b %errorlevel%
 
+echo.
+echo Built GUI: build\windows-release\DEVICEControl_artefacts
+echo Built CLI: build\windows-release\DEVICEControlCLI_artefacts
+
 endlocal

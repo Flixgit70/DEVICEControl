@@ -14,6 +14,7 @@ struct MappingDraftRow
 {
     bool enabled = true;
     juce::String path;
+    juce::String stableNamePath;
     juce::String provider;
     juce::String label;
     juce::String label2;

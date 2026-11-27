@@ -8,6 +8,7 @@
 #include "model/ProviderConfig.h"
 #include "services/CsvService.h"
 #include "services/ProjectService.h"
+#include "cli/CliCommandModel.h"
 #include <iostream>
 
 namespace
@@ -746,6 +747,168 @@ void testParameterValueFormatting()
     p.enumEntries.add("2:On Air");
     expect(p.formattedValue() == "On Air", "Enum status values must show their Ember label when available");
 }
+
+void testCliSwitchNavigation()
+{
+    er::CliSnapshot snapshot;
+    er::ProviderConfig provider;
+    provider.id = "lawo";
+    provider.name = "Lawo";
+    snapshot.providers.push_back(provider);
+    snapshot.status = "1/1 providers connected";
+    snapshot.appVersion = "0.7.14";
+
+    er::TreeEntry root;
+    root.kind = er::TreeEntryKind::node;
+    root.path = "@lawo";
+    root.identifier = "Lawo";
+    root.directoryLoaded = true;
+    snapshot.tree.push_back(root);
+
+    er::TreeEntry system;
+    system.kind = er::TreeEntryKind::node;
+    system.path = "@lawo.1";
+    system.parentPath = "@lawo";
+    system.identifier = "System";
+    system.directoryLoaded = true;
+    snapshot.tree.push_back(system);
+
+    er::TreeEntry inputs;
+    inputs.kind = er::TreeEntryKind::node;
+    inputs.path = "@lawo.1.2";
+    inputs.parentPath = "@lawo.1";
+    inputs.identifier = "Inputs";
+    inputs.directoryLoaded = true;
+    snapshot.tree.push_back(inputs);
+
+    er::TreeEntry gain;
+    gain.kind = er::TreeEntryKind::parameter;
+    gain.path = "@lawo.1.2.3";
+    gain.parentPath = "@lawo.1.2";
+    gain.identifier = "Gain";
+    snapshot.tree.push_back(gain);
+
+    er::ParameterInfo parameter;
+    parameter.path = gain.path;
+    parameter.identifier = "Gain";
+    parameter.kind = er::ParameterKind::real;
+    parameter.value = -125;
+    parameter.factor = 10.0;
+    parameter.writable = true;
+    parameter.online = true;
+    snapshot.parameters.push_back(parameter);
+
+    er::PageModel page;
+    page.name = "Routing";
+    er::ControlMapping mapping;
+    mapping.parameterPath = gain.path;
+    mapping.label = "Program Gain";
+    mapping.type = er::ControlType::encoder;
+    page.controls.push_back(mapping);
+
+    mapping.parameterPath = "@lawo.1.2.4";
+    mapping.label = "Aux Send";
+    page.controls.push_back(mapping);
+    mapping.parameterPath = "@lawo.1.2.5";
+    mapping.label = "On Air";
+    mapping.type = er::ControlType::button;
+    page.controls.push_back(mapping);
+    mapping.parameterPath = "@lawo.1.2.6";
+    mapping.label = "Monitor Level";
+    mapping.type = er::ControlType::meter;
+    page.controls.push_back(mapping);
+    const auto maximumLengthLabel = juce::String::repeatedString("L", 256);
+    mapping.parameterPath = "@lawo.1.2.7";
+    mapping.label = maximumLengthLabel;
+    mapping.type = er::ControlType::showContent;
+    page.controls.push_back(mapping);
+    snapshot.pages.push_back(page);
+
+    const auto completion = er::CliCommandModel::process(
+        "show Lawo Sys", er::CliCommandModel::Mode::complete, snapshot);
+    expect(completion.completedLine == "show Lawo System ",
+           "CLI Tab completion must complete the next unique tree group");
+
+    const auto secondCompletion = er::CliCommandModel::process(
+        completion.completedLine, er::CliCommandModel::Mode::complete, snapshot);
+    expect(secondCompletion.completedLine == "show Lawo System Inputs ",
+           "A second CLI Tab must continue directly into the next unique tree group");
+
+    const auto thirdCompletion = er::CliCommandModel::process(
+        secondCompletion.completedLine, er::CliCommandModel::Mode::complete, snapshot);
+    expect(thirdCompletion.completedLine == "show Lawo System Inputs Gain ",
+           "Repeated CLI Tabs must continue down a unique tree path without an ls command");
+
+    const auto nextLevel = er::CliCommandModel::process(
+        "show Lawo System ", er::CliCommandModel::Mode::help, snapshot);
+    expect(nextLevel.candidates.size() == 1 && nextLevel.candidates[0].token == "Inputs",
+           "CLI question-mark help must list the next tree level");
+
+    const auto oneShotHelp = er::CliCommandModel::process(
+        "show Lawo System ?", er::CliCommandModel::Mode::execute, snapshot);
+    expect(oneShotHelp.candidates.size() == 1 && oneShotHelp.candidates[0].token == "Inputs",
+           "A literal question mark must provide the same contextual choices in one-shot mode");
+
+    const auto topLevelHelp = er::CliCommandModel::process(
+        "show ?", er::CliCommandModel::Mode::execute, snapshot);
+    expect(topLevelHelp.candidates.size() == 4
+               && topLevelHelp.text.contains("panel")
+               && topLevelHelp.text.contains("status")
+               && topLevelHelp.text.contains("version")
+               && topLevelHelp.text.contains("Lawo"),
+           "One-shot show question-mark help must list panels, status, version and providers");
+
+    const auto version = er::CliCommandModel::process(
+        "show version", er::CliCommandModel::Mode::execute, snapshot);
+    expect(version.ok && version.text == "DEVICEControl 0.7.14",
+           "CLI show version must report the running GUI release version");
+
+    const auto value = er::CliCommandModel::process(
+        "show Lawo System Inputs Gain", er::CliCommandModel::Mode::execute, snapshot);
+    expect(value.ok && value.text.contains("Value:        -12.5"),
+           "CLI show command must output the resolved live parameter value");
+
+    const auto panel = er::CliCommandModel::process(
+        "show panel Routing", er::CliCommandModel::Mode::execute, snapshot);
+    expect(panel.ok && panel.text.contains("Program Gain") && panel.text.contains("-12.5"),
+           "CLI panel command must output every mapped control and its live value");
+    expect(panel.text.contains(maximumLengthLabel),
+           "CLI panel output must preserve labels up to 256 characters without truncation");
+
+    const auto panelRows = er::CliCommandModel::process(
+        "show panel Routing ?", er::CliCommandModel::Mode::execute, snapshot);
+    expect(panelRows.ok && panelRows.candidates.size() == 6
+               && panelRows.text.contains("Program Gain")
+               && panelRows.text.contains("Monitor Level"),
+           "CLI panel question-mark help must list all numbered panel rows");
+
+    const auto panelRange = er::CliCommandModel::process(
+        "show panel Routing 2-3", er::CliCommandModel::Mode::execute, snapshot);
+    expect(panelRange.ok && panelRange.text.contains("Aux Send")
+               && panelRange.text.contains("On Air")
+               && !panelRange.text.contains("Program Gain")
+               && !panelRange.text.contains("Monitor Level"),
+           "CLI panel row ranges must output only the requested consecutive rows");
+
+    const auto panelList = er::CliCommandModel::process(
+        "show panel Routing 1-2,4", er::CliCommandModel::Mode::execute, snapshot);
+    expect(panelList.ok && panelList.text.contains("Program Gain")
+               && panelList.text.contains("Aux Send")
+               && panelList.text.contains("Monitor Level")
+               && !panelList.text.contains("On Air"),
+           "CLI panel row lists must combine ranges and individual rows");
+
+    const auto panelLabel = er::CliCommandModel::process(
+        "show panel Routing \"Aux Send\"", er::CliCommandModel::Mode::execute, snapshot);
+    expect(panelLabel.ok && panelLabel.text.contains("Aux Send")
+               && !panelLabel.text.contains("Program Gain"),
+           "CLI panel selection must accept a unique control label");
+
+    const auto invalidPanelRange = er::CliCommandModel::process(
+        "show panel Routing 3-8", er::CliCommandModel::Mode::execute, snapshot);
+    expect(!invalidPanelRange.ok && invalidPanelRange.text.contains("outside 1-5"),
+           "CLI panel selection must reject rows outside the panel");
+}
 }
 
 int main()
@@ -764,6 +927,7 @@ int main()
     testControlAlertPolicy();
     testParameterDisplayNameFallback();
     testParameterValueFormatting();
+    testCliSwitchNavigation();
 
     if (failures == 0)
     {

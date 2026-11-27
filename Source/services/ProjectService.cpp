@@ -100,7 +100,10 @@ bool ProjectService::save(const juce::File& file, const PageSet& pages,
                           const std::vector<ProviderConfig>& providers, juce::String& error)
 {
     auto root = std::make_unique<juce::DynamicObject>();
-    root->setProperty("formatVersion", 9);
+    root->setProperty("formatVersion", 10);
+    root->setProperty("mappingIdentityMode",
+                       pages.mappingIdentityMode() == MappingIdentityMode::fullNamePath
+                           ? juce::String("full_name_path") : juce::String("path_address"));
 
     juce::Array<juce::var> providerVars;
     for (const auto& provider : providers)
@@ -139,6 +142,7 @@ bool ProjectService::save(const juce::File& file, const PageSet& pages,
             co->setProperty("providerId", providerId);
             co->setProperty("path", localPath);
             co->setProperty("qualifiedPath", c.parameterPath);
+            co->setProperty("stableNamePath", c.stableNamePath);
             co->setProperty("label", c.label);
             co->setProperty("label2", c.label2);
             co->setProperty("type", controlTypeToString(c.type));
@@ -183,6 +187,11 @@ bool ProjectService::load(const juce::File& file, PageSet& pages,
     auto v = juce::JSON::parse(file.loadFileAsString());
     if (!v.isObject()) { error = "Invalid project JSON"; return false; }
     auto* o = v.getDynamicObject();
+
+    pages.setMappingIdentityMode(o->getProperty("mappingIdentityMode").toString()
+                                     .equalsIgnoreCase("full_name_path")
+                                     ? MappingIdentityMode::fullNamePath
+                                     : MappingIdentityMode::pathAddress);
 
     providers.clear();
     if (auto providerValue = o->getProperty("providers"); providerValue.isArray())
@@ -236,6 +245,7 @@ bool ProjectService::load(const juce::File& file, PageSet& pages,
                                                                : localPath;
                 }
                 c.parameterPath = qualified;
+                c.stableNamePath = co->getProperty("stableNamePath").toString();
                 c.label = co->getProperty("label").toString();
                 c.label2 = co->getProperty("label2").toString();
                 c.type = controlTypeFromString(co->getProperty("type").toString());

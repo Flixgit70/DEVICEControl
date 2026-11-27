@@ -1,4 +1,4 @@
-# DEVICEControl 0.7.11
+# DEVICEControl
 
 DEVICEControl is a JUCE standalone control application with a protocol-neutral
 provider architecture. Ember+ is the current production provider; the codebase
@@ -6,8 +6,7 @@ is structured for additional providers such as DirectOut HTTP/JSON.
 
 ## Current functionality
 
-The restored 0.7.11 source contains the complete current UI and control logic,
-including:
+The source contains the complete current UI and control logic, including:
 
 - multi-provider Ember+ browsing and control
 - provider-aware pages and mappings
@@ -18,6 +17,8 @@ including:
 - include/exclude tree filtering
 - editable content and threshold handling
 - reconnect / refresh support
+- local read-only CLI with contextual `?` help, hierarchical Tab completion,
+  live tree values and complete panel views
 
 ## Reproducible dependencies
 
@@ -56,8 +57,13 @@ The same applies to `EMBERPLUS_DIR`.
 `.github/workflows/release.yml` builds tagged releases and attaches packaged
 binaries to the matching GitHub Release. Release builds include macOS ARM64, a
 separate macOS Sonoma ARM64 build, Windows x64, Linux x64 and Linux ARM64.
+Each release package contains both the GUI application and `DEVICEControlCLI`.
+The workflow also creates SHA-256 checksums and uses a versioned
+`RELEASE_NOTES_<tag>.md` file when one is present.
 
-See [`README_RELEASES.md`](README_RELEASES.md) and [`docs/CI.md`](docs/CI.md).
+See [`README_RELEASES.md`](README_RELEASES.md), [`docs/CI.md`](docs/CI.md),
+the [0.7.14 release notes](RELEASE_NOTES_v0.7.14.md) and the
+[`CLI guide`](docs/CLI.md).
 
 ## Architecture
 

@@ -102,9 +102,19 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           APP="$(find "${{ matrix.artifact_dir }}" -maxdepth 4 -type d -name 'DEVICEControl.app' -print -quit)"
+          CLI="$(find "build/${{ matrix.preset }}" -type f -name 'DEVICEControlCLI' -perm -111 -print -quit)"
           test -n "${APP}" || { echo "DEVICEControl.app not found"; exit 1; }
-          ditto -c -k --sequesterRsrc --keepParent "${APP}" \
+          test -n "${CLI}" || { echo "DEVICEControlCLI not found"; exit 1; }
+          TMP="dist/DEVICEControl_${VERSION}_${{ matrix.package_name }}"
+          mkdir -p "${TMP}"
+          ditto "${APP}" "${TMP}/DEVICEControl.app"
+          cp "${CLI}" "${TMP}/DEVICEControlCLI"
+          cp README.md "${TMP}/" || true
+          cp THIRD_PARTY_NOTICES.md "${TMP}/" || true
+          cp docs/CLI.md "${TMP}/" || true
+          ditto -c -k --sequesterRsrc --keepParent "${TMP}" \
             "dist/DEVICEControl_${VERSION}_${{ matrix.package_name }}.zip"
+          rm -rf "${TMP}"
 
       - name: Package Linux
         if: runner.os == 'Linux'
@@ -114,12 +124,16 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           BIN="$(find "${{ matrix.artifact_dir }}" -maxdepth 4 -type f -name 'DEVICEControl' -perm -111 -print -quit)"
+          CLI="$(find "build/${{ matrix.preset }}" -type f -name 'DEVICEControlCLI' -perm -111 -print -quit)"
           test -n "${BIN}" || { echo "DEVICEControl executable not found"; exit 1; }
+          test -n "${CLI}" || { echo "DEVICEControlCLI not found"; exit 1; }
           TMP="dist/DEVICEControl_${VERSION}_${{ matrix.package_name }}"
           mkdir -p "${TMP}"
           cp "${BIN}" "${TMP}/DEVICEControl"
+          cp "${CLI}" "${TMP}/DEVICEControlCLI"
           cp README.md "${TMP}/" || true
           cp THIRD_PARTY_NOTICES.md "${TMP}/" || true
+          cp docs/CLI.md "${TMP}/" || true
           (cd dist && cmake -E tar cf "DEVICEControl_${VERSION}_${{ matrix.package_name }}.zip" --format=zip "DEVICEControl_${VERSION}_${{ matrix.package_name }}")
           rm -rf "${TMP}"
 
@@ -131,13 +145,17 @@ jobs:
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $exe = Get-ChildItem -Path "${{ matrix.artifact_dir }}" -Filter "DEVICEControl.exe" -File -Recurse | Select-Object -First 1
+          $cli = Get-ChildItem -Path "build/${{ matrix.preset }}" -Filter "DEVICEControlCLI.exe" -File -Recurse | Select-Object -First 1
           if (-not $exe) { throw "DEVICEControl.exe not found" }
+          if (-not $cli) { throw "DEVICEControlCLI.exe not found" }
           $folderName = "DEVICEControl_${version}_${{ matrix.package_name }}"
           $tmp = Join-Path "dist" $folderName
           New-Item -ItemType Directory -Force -Path $tmp | Out-Null
           Copy-Item $exe.FullName (Join-Path $tmp "DEVICEControl.exe")
+          Copy-Item $cli.FullName (Join-Path $tmp "DEVICEControlCLI.exe")
           if (Test-Path "README.md") { Copy-Item "README.md" $tmp }
           if (Test-Path "THIRD_PARTY_NOTICES.md") { Copy-Item "THIRD_PARTY_NOTICES.md" $tmp }
+          if (Test-Path "docs/CLI.md") { Copy-Item "docs/CLI.md" $tmp }
           Compress-Archive -Path $tmp -DestinationPath "dist/DEVICEControl_${version}_${{ matrix.package_name }}.zip" -Force
           Remove-Item -Recurse -Force $tmp
 
@@ -179,9 +197,17 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          gh release create "${GITHUB_REF_NAME}" \
-            dist/*.zip \
-            dist/SHA256SUMS.txt \
-            --verify-tag \
-            --title "DEVICEControl ${VERSION}" \
-            --generate-notes
+          NOTES_FILE="RELEASE_NOTES_${GITHUB_REF_NAME}.md"
+          RELEASE_ARGS=(
+            "${GITHUB_REF_NAME}"
+            dist/*.zip
+            dist/SHA256SUMS.txt
+            --verify-tag
+            --title "DEVICEControl ${VERSION}"
+          )
+          if [[ -f "${NOTES_FILE}" ]]; then
+            RELEASE_ARGS+=(--notes-file "${NOTES_FILE}")
+          else
+            RELEASE_ARGS+=(--generate-notes)
+          fi
+          gh release create "${RELEASE_ARGS[@]}"

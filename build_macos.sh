@@ -8,4 +8,6 @@ cd "$ROOT"
 cmake --preset macos-release
 cmake --build --preset macos-release --parallel
 ctest --preset macos-release
-printf '\nBuilt artifacts are under:\n%s\n' "$ROOT/build/macos-release/DEVICEControl_artefacts"
+printf '\nBuilt GUI:\n%s\nBuilt CLI:\n%s\n' \
+  "$ROOT/build/macos-release/DEVICEControl_artefacts" \
+  "$ROOT/build/macos-release/DEVICEControlCLI_artefacts"

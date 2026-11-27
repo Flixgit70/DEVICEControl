@@ -10,4 +10,6 @@ cd "$ROOT"
 cmake --preset linux-release
 cmake --build --preset linux-release --parallel
 ctest --preset linux-release
-printf '\nBuilt artifacts are under:\n%s\n' "$ROOT/build/linux-release/DEVICEControl_artefacts"
+printf '\nBuilt GUI:\n%s\nBuilt CLI:\n%s\n' \
+  "$ROOT/build/linux-release/DEVICEControl_artefacts" \
+  "$ROOT/build/linux-release/DEVICEControlCLI_artefacts"

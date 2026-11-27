@@ -17,6 +17,7 @@ void MappingDraft::addParameters(const std::vector<ParameterInfo>& params, int d
 
         MappingDraftRow r;
         r.path = p.path;
+        r.stableNamePath = p.treePath.replace(" / ", "/");
         r.provider = p.providerName;
         r.label = p.fullTreeLabel();
         if (p.description.isNotEmpty() && p.description != r.label)
@@ -59,6 +60,7 @@ void MappingDraft::replaceFromPages(const PageSet& pages, const ParameterStore* 
             MappingDraftRow row;
             row.enabled = true;
             row.path = control.parameterPath;
+            row.stableNamePath = control.stableNamePath;
             row.provider = ProviderPath::providerId(control.parameterPath);
             row.label = control.label;
             row.label2 = control.label2;
@@ -77,6 +79,8 @@ void MappingDraft::replaceFromPages(const PageSet& pages, const ParameterStore* 
             {
                 if (const auto info = store->find(control.parameterPath))
                 {
+                    if (row.stableNamePath.isEmpty())
+                        row.stableNamePath = info->treePath.replace(" / ", "/");
                     row.kind = info->kind;
                     row.writable = info->writable;
                 }
@@ -102,6 +106,7 @@ void MappingDraft::replaceFromPages(const PageSet& pages, std::function<std::opt
             MappingDraftRow row;
             row.enabled = true;
             row.path = control.parameterPath;
+            row.stableNamePath = control.stableNamePath;
             row.provider = ProviderPath::providerId(control.parameterPath);
             row.label = control.label;
             row.label2 = control.label2;
@@ -120,6 +125,8 @@ void MappingDraft::replaceFromPages(const PageSet& pages, std::function<std::opt
             {
                 if (const auto info = resolver(control.parameterPath))
                 {
+                    if (row.stableNamePath.isEmpty())
+                        row.stableNamePath = info->treePath.replace(" / ", "/");
                     row.provider = info->providerName;
                     row.kind = info->kind;
                     row.writable = info->writable;
@@ -278,6 +285,7 @@ void MappingDraft::applyTo(PageSet& pages) const
 
         ControlMapping mapping;
         mapping.parameterPath = row.path;
+        mapping.stableNamePath = row.stableNamePath;
         mapping.label = row.label;
         mapping.type = row.type;
         mapping.label2 = row.label2;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(DEVICEControl VERSION 0.7.13 LANGUAGES C CXX)
+project(DEVICEControl VERSION 0.7.14 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -103,6 +103,7 @@ file(GLOB_RECURSE DEVICECONTROL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h"
 )
+list(FILTER DEVICECONTROL_SOURCES EXCLUDE REGEX ".*/cli/CliMain\\.cpp$")
 
 target_sources(DEVICEControl PRIVATE ${DEVICECONTROL_SOURCES})
 target_include_directories(DEVICEControl PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
@@ -129,6 +130,35 @@ else()
 endif()
 
 # -----------------------------------------------------------------------------
+# Read-only command-line client for the running GUI application
+# -----------------------------------------------------------------------------
+juce_add_console_app(DEVICEControlCLI
+    PRODUCT_NAME "DEVICEControlCLI"
+)
+juce_generate_juce_header(DEVICEControlCLI)
+target_sources(DEVICEControlCLI PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/cli/CliMain.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/cli/CliTransport.cpp"
+)
+target_include_directories(DEVICEControlCLI PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+target_compile_definitions(DEVICEControlCLI PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:DEVICEControlCLI,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+)
+target_link_libraries(DEVICEControlCLI PRIVATE
+    juce::juce_core
+    juce::juce_events
+)
+
+if(MSVC)
+    target_compile_options(DEVICEControlCLI PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(DEVICEControlCLI PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# -----------------------------------------------------------------------------
 # Regression tests
 # -----------------------------------------------------------------------------
 include(CTest)
@@ -144,6 +174,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/Source/model/ParameterStore.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Source/model/ControlTreeModel.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Source/model/MappingDraft.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Source/cli/CliCommandModel.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Source/services/CsvService.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Source/services/ProjectService.cpp"
     )

@@ -22,11 +22,14 @@ int MappingController::addControlsToPage(const std::vector<juce::String>& paths,
 
         ControlMapping mapping;
         mapping.parameterPath = path;
+        mapping.stableNamePath = info->treePath.replace(" / ", "/");
         mapping.type = type;
         if (existing != page.controls.end())
         {
             mapping.label = existing->label;
             mapping.label2 = existing->label2;
+            if (existing->stableNamePath.isNotEmpty())
+                mapping.stableNamePath = existing->stableNamePath;
             mapping.colourArgb = existing->colourArgb;
             mapping.tileWidth = existing->tileWidth;
             mapping.tileHeight = existing->tileHeight;
