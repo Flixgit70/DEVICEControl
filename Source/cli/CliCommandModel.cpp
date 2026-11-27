@@ -25,7 +25,7 @@ std::vector<ParsedToken> tokenize(const juce::String& line)
 
         ParsedToken token;
         token.start = position;
-        const auto quote = line[position] == '"' || line[position] == '\'' ? line[position++] : 0;
+        const juce::juce_wchar quote = line[position] == '"' || line[position] == '\'' ? line[position++] : 0;
         while (position < line.length())
         {
             const auto character = line[position];
