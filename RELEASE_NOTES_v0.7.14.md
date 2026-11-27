@@ -17,7 +17,7 @@
 ## Release packages
 
 The automated release workflow builds the GUI and CLI for macOS ARM64,
-macOS Sonoma ARM64, Windows x64, Linux x64 and Linux ARM64. Each package
+Windows x64, Linux x64 and Linux ARM64. Each package
 includes the applicable app/binaries, README, third-party notices and CLI guide.
 The workflow attaches SHA-256 checksums to the GitHub Release.
 

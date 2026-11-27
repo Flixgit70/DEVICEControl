@@ -27,7 +27,7 @@ jobs:
             preset: linux-release
             artifact_dir: build/linux-release/DEVICEControl_artefacts
           - name: macOS Apple Silicon
-            os: macos-14
+            os: macos-15
             preset: macos-release
             artifact_dir: build/macos-release/DEVICEControl_artefacts
           - name: Windows x64

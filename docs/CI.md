@@ -65,7 +65,7 @@ build_windows.bat
 `.github/workflows/ci.yml` runs configure, build and tests for:
 
 - Ubuntu 24.04 x64
-- macOS 14 Apple Silicon
+- macOS 15 Apple Silicon
 - Windows Server 2022 x64
 
 Each job uploads the JUCE artifacts for inspection/download after the build.

@@ -55,8 +55,8 @@ The same applies to `EMBERPLUS_DIR`.
 
 `.github/workflows/ci.yml` builds and tests normal pushes and pull requests.
 `.github/workflows/release.yml` builds tagged releases and attaches packaged
-binaries to the matching GitHub Release. Release builds include macOS ARM64, a
-separate macOS Sonoma ARM64 build, Windows x64, Linux x64 and Linux ARM64.
+binaries to the matching GitHub Release. Release builds include macOS ARM64,
+Windows x64, Linux x64 and Linux ARM64.
 Each release package contains both the GUI application and `DEVICEControlCLI`.
 The workflow also creates SHA-256 checksums and uses a versioned
 `RELEASE_NOTES_<tag>.md` file when one is present.

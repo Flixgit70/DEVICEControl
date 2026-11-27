@@ -33,8 +33,8 @@ git push origin v0.7.14
 ```
 
 Pushing the tag starts `.github/workflows/release.yml`. It verifies the version,
-builds and tests the release on macOS ARM64, macOS Sonoma ARM64, Windows x64,
-Linux x64 and Linux ARM64, packages the GUI and CLI, calculates SHA-256
+builds and tests the release on macOS ARM64, Windows x64, Linux x64 and
+Linux ARM64, packages the GUI and CLI, calculates SHA-256
 checksums, and creates the GitHub Release. For `v0.7.14`, the workflow uses
 `RELEASE_NOTES_v0.7.14.md`; other tags use GitHub-generated notes unless a
 matching versioned notes file is added.
@@ -47,7 +47,7 @@ artifacts belong on the GitHub Release, not in the source repository.
 - Confirm the intended release commit is on `main`.
 - Confirm the tag version matches `CMakeLists.txt`.
 - Review the versioned release notes.
-- Check the GitHub Actions run for all five build targets and both test suites.
+- Check the GitHub Actions run for all four build targets and both test suites.
 - Confirm the GitHub Release contains each ZIP and `SHA256SUMS.txt`.
 
 The workflow publishes automatically when the tag is pushed. Do not push the
