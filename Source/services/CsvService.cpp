@@ -81,7 +81,10 @@ bool CsvService::exportPageMappings(const juce::File& file, const PageModel& pag
         if (p.path.isEmpty()) p.path = mapping.parameterPath;
         if (p.localPath.isEmpty()) p.localPath = ProviderPath::localPath(p.path);
         if (p.providerId.isEmpty()) p.providerId = ProviderPath::providerId(p.path);
-        if (p.treePath.isEmpty()) p.treePath = mapping.label;
+        // Keep the saved identity even when offline or when the old numeric
+        // address currently points at a different parameter. Labels are editable.
+        if (mapping.stableNamePath.isNotEmpty()) p.treePath = mapping.stableNamePath;
+        else if (p.treePath.isEmpty()) p.treePath = mapping.label;
         params.push_back(std::move(p));
     }
     return exportParameters(file, params, error, &page.controls, pageNumber);
@@ -226,6 +229,9 @@ bool CsvService::importMappings(const juce::File& file, PageSet& pages, juce::St
         while ((int)pages.pages().size()<page) pages.addPage();
         ControlMapping m;
         m.parameterPath=path;
+        m.stableNamePath = get(treePathI).trim().replace(" / ", "/");
+        if (m.stableNamePath.isEmpty())
+            m.stableNamePath = branchLabelFromColumns(c, branchIndices);
         m.label=get(labelI).trim();
         if (m.label.isEmpty())
         {

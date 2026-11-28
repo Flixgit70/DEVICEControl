@@ -202,6 +202,8 @@ void testCsvExportAndImport()
         const auto& c = pages.pages()[3].controls[0];
         expect(c.parameterPath == er::ProviderPath::qualify("provider-a", "1.2.3"), "Provider-aware CSV import must qualify the local Ember path");
         expect(c.label == "Gain Left", "Plain semicolon CSV label must import without quotation marks");
+        expect(c.stableNamePath == "Mixer/Inputs/Gain",
+               "CSV hierarchy must supply the stable identity independently of a custom label");
         expect(c.label2 == "Main Fader", "Second CSV label must be imported even when Excel-style header spelling uses Label 2");
         expect(c.colourArgb == 0xffff941f, "CSV colour must be imported as ARGB");
         expect(c.type == er::ControlType::encoder, "encoder control type must be imported");
@@ -243,6 +245,8 @@ void testCsvExportAndImport()
     {
         expect(legacyPages.pages()[0].controls[0].label == "Legacy Gain",
                "Legacy direction columns must still import in plain semicolon format");
+        expect(legacyPages.pages()[0].controls[0].stableNamePath == "Legacy/Branch/Gain",
+               "Older tree_path CSVs must retain full identity even with a custom label");
         expect(legacyPages.pages()[0].controls[0].label2 == "Legacy Description",
                "Legacy semicolon CSV must retain Label 2");
         expect(legacyPages.pages()[0].controls[0].orangeBelowThresholdEnabled
@@ -255,6 +259,48 @@ void testCsvExportAndImport()
         expect(legacyPages.pages()[0].controls[1].label == "Legacy/Branch/Mute",
                "Legacy tree_path must still provide the Label 1 fallback");
     legacyFile.deleteFile();
+}
+
+void testCsvSavedNameIdentityRoundTrip()
+{
+    const auto file = tempFile(".csv");
+    er::PageModel page;
+    er::ControlMapping mapping;
+    mapping.parameterPath = er::ProviderPath::qualify("provider-a", "1.2.3");
+    mapping.stableNamePath = "Mixer/Inputs/Gain";
+    mapping.label = "My custom gain button";
+    page.controls.push_back(mapping);
+    juce::String error;
+    // Disconnected providers return a numeric stub, rather than the saved name.
+    auto offline = [] (const juce::String& path) -> std::optional<er::ParameterInfo>
+    {
+        er::ParameterInfo info;
+        info.path = path;
+        info.treePath = er::ProviderPath::localPath(path);
+        info.online = false;
+        return info;
+    };
+    expect(er::CsvService::exportPageMappings(file, page, 1, offline, error),
+           "Offline page CSV export must succeed: " + error);
+    er::PageSet imported;
+    expect(er::CsvService::importMappings(file, imported, error), "Saved-name CSV import must succeed: " + error);
+    expect(imported.pages()[0].controls.size() == 1, "Saved-name CSV must contain one control");
+    if (!imported.pages()[0].controls.empty())
+    {
+        const auto& restored = imported.pages()[0].controls[0];
+        expect(restored.stableNamePath == mapping.stableNamePath,
+               "Offline export/import must preserve the saved full name instead of the numeric stub");
+        expect(restored.label == mapping.label, "CSV identity round trip must preserve custom labels");
+        expect(restored.parameterPath == mapping.parameterPath, "CSV must preserve the numeric address as well");
+    }
+    expect(file.replaceWithText("path;label;enabled\n1.2.3;An arbitrary label;true\n"),
+           "Numeric-only CSV fixture must be writable");
+    er::PageSet numericOnly;
+    expect(er::CsvService::importMappings(file, numericOnly, error), "Numeric-only legacy CSV must remain usable");
+    if (!numericOnly.pages()[0].controls.empty())
+        expect(numericOnly.pages()[0].controls[0].stableNamePath.isEmpty(),
+               "Custom labels must never be guessed as stable identities when the CSV has no name columns");
+    file.deleteFile();
 }
 
 void testCsvRejectsMissingPathColumn()
@@ -1023,6 +1069,7 @@ int main()
     testPageControlRemoval();
     testParameterStoreRevisions();
     testCsvExportAndImport();
+    testCsvSavedNameIdentityRoundTrip();
     testCsvRejectsMissingPathColumn();
     testProjectRoundTrip();
     testProviderPathAndMultiProviderProject();

@@ -62,7 +62,7 @@ The workflow also creates SHA-256 checksums and uses a versioned
 `RELEASE_NOTES_<tag>.md` file when one is present.
 
 See [`README_RELEASES.md`](README_RELEASES.md), [`docs/CI.md`](docs/CI.md),
-the [0.7.16 release notes](RELEASE_NOTES_v0.7.16.md) and the
+the [0.7.17 release notes](RELEASE_NOTES_v0.7.17.md) and the
 [`CLI guide`](docs/CLI.md).
 
 ## Architecture

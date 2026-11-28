@@ -2,9 +2,9 @@
 
 ## Current release candidate
 
-- Version: `0.7.16`
-- Tag: `v0.7.16`
-- Release notes: [`RELEASE_NOTES_v0.7.16.md`](RELEASE_NOTES_v0.7.16.md)
+- Version: `0.7.17`
+- Tag: `v0.7.17`
+- Release notes: [`RELEASE_NOTES_v0.7.17.md`](RELEASE_NOTES_v0.7.17.md)
 
 The version in `CMakeLists.txt` is authoritative. The release workflow checks
 that a pushed tag matches it before building.
@@ -27,16 +27,16 @@ outputs.
 After the release commit is on `main`, create and push the matching tag:
 
 ```bash
-git tag -a v0.7.16 -m "DEVICEControl 0.7.16"
+git tag -a v0.7.17 -m "DEVICEControl 0.7.17"
 git push origin main
-git push origin v0.7.16
+git push origin v0.7.17
 ```
 
 Pushing the tag starts `.github/workflows/release.yml`. It verifies the version,
 builds and tests the release on macOS ARM64, Windows x64, Linux x64 and
 Linux ARM64, packages the GUI and CLI, calculates SHA-256
-checksums, and creates the GitHub Release. For `v0.7.16`, the workflow uses
-`RELEASE_NOTES_v0.7.16.md`; other tags use GitHub-generated notes unless a
+checksums, and creates the GitHub Release. For `v0.7.17`, the workflow uses
+`RELEASE_NOTES_v0.7.17.md`; other tags use GitHub-generated notes unless a
 matching versioned notes file is added.
 
 The resulting release includes ZIP packages and `SHA256SUMS.txt`. Build
