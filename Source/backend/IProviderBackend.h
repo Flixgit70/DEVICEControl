@@ -41,6 +41,7 @@ public:
     virtual bool isDirectoryLoaded(const juce::String& localPath) const = 0;
     virtual bool isDirectoryLoading(const juce::String& localPath) const = 0;
     virtual std::uint64_t treeRevision() const = 0;
+    virtual std::uint64_t treeIdentityRevision() const { return treeRevision(); }
 
     virtual std::vector<ParameterInfo> parameterSnapshot() const = 0;
     virtual std::optional<ParameterInfo> findParameter(const juce::String& localPath) const = 0;

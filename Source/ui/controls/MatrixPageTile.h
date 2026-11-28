@@ -16,6 +16,7 @@ public:
 
     void refresh(const ParameterInfo&) override {}
     void refreshMatrix(const TreeEntry&, const std::vector<ParameterInfo>& parameters);
+    bool hasVisibleEditor() const { return editorWindow && editorWindow->isVisible(); }
     void setControlLabel2(const juce::String&) override;
     void paint(juce::Graphics&) override;
     void resized() override;

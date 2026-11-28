@@ -3,6 +3,7 @@
 #include "model/ParameterStore.h"
 #include "model/ControlTreeModel.h"
 #include "model/MappingDraft.h"
+#include "model/MappingIdentityIndex.h"
 #include "model/ControlValuePolicy.h"
 #include "model/ControlAlertPolicy.h"
 #include "model/ProviderConfig.h"
@@ -748,6 +749,111 @@ void testParameterValueFormatting()
     expect(p.formattedValue() == "On Air", "Enum status values must show their Ember label when available");
 }
 
+void testMappingIdentityIndex()
+{
+    er::MappingIdentityIndex index;
+    auto parameter = [] (const juce::String& provider, const juce::String& local)
+    {
+        er::ParameterInfo info;
+        info.providerId = provider;
+        info.path = er::ProviderPath::qualify(provider, local);
+        info.treePath = "Routing / Gain";
+        return info;
+    };
+    auto entry = [] (const juce::String& provider, const juce::String& local,
+                     const juce::String& parent, const juce::String& name, er::TreeEntryKind kind)
+    {
+        er::TreeEntry item;
+        item.path = er::ProviderPath::qualify(provider, local);
+        item.parentPath = local.isEmpty() ? juce::String() : er::ProviderPath::qualify(provider, parent);
+        item.identifier = name;
+        item.kind = kind;
+        return item;
+    };
+    const auto a = parameter("a", "1.1");
+    const auto b = parameter("b", "1.1");
+    std::vector<er::TreeEntry> tree {
+        entry("a", "", "", "Provider A", er::TreeEntryKind::node),
+        entry("a", "1", "", "Routing", er::TreeEntryKind::node),
+        entry("a", "1.10", "1", "Matrix", er::TreeEntryKind::matrix),
+        entry("b", "", "", "Provider B", er::TreeEntryKind::node),
+        entry("b", "1", "", "Routing", er::TreeEntryKind::node),
+        entry("b", "1.10", "1", "Matrix", er::TreeEntryKind::matrix)
+    };
+    index.rebuild({a, b}, tree);
+    expect(index.parameterPath("a", "Routing/Gain") == a.path,
+           "Same full names in different providers must remain independent");
+    expect(index.matrixPath("a", "Routing/Matrix") == er::ProviderPath::qualify("a", "1.10"),
+           "Matrix full names must omit the provider root label");
+    expect(index.parameterPath("a", "Gain").isEmpty(), "Partial names must never resolve");
+    expect(index.matrixName(er::ProviderPath::qualify("b", "1.10")) == "Routing/Matrix",
+           "Matrix name lookup must use its complete ancestry");
+
+    auto duplicate = parameter("a", "2.1");
+    tree.push_back(entry("a", "1.11", "1", "Matrix", er::TreeEntryKind::matrix));
+    index.rebuild({a, duplicate, b}, tree);
+    expect(index.parameterPath("a", "Routing/Gain").isEmpty(), "Duplicate parameter names must block resolution");
+    expect(index.matrixPath("a", "Routing/Matrix").isEmpty(), "Duplicate matrix names must block resolution");
+    expect(index.parameterPath("b", "Routing/Gain") == b.path, "Duplicates must not affect another provider");
+
+    auto moved = parameter("a", "9.1");
+    index.rebuild({moved}, {});
+    expect(index.parameterPath("a", "Routing/Gain") == moved.path, "An identity must follow a changed numeric address");
+    expect(index.parameterPath("b", "Routing/Gain").isEmpty(), "Rebuild must discard removed providers");
+    expect(index.matrixPath("a", "Routing/Matrix").isEmpty(), "Rebuild must discard stale matrices");
+    index.rebuild({}, {entry("a", "1.10", "1", "Matrix", er::TreeEntryKind::matrix)});
+    expect(index.matrixName(er::ProviderPath::qualify("a", "1.10")).isEmpty(),
+           "An incomplete matrix ancestry must not produce a partial identity");
+
+    // Exercise many independent matrices and repeated lookups. Each matrix's
+    // ancestry shares the one tree index built by rebuild().
+    tree.clear();
+    tree.push_back(entry("a", "", "", "Provider", er::TreeEntryKind::node));
+    for (int i = 1; i <= 2000; ++i)
+    {
+        const auto group = juce::String(i);
+        tree.push_back(entry("a", group, "", "Group " + group, er::TreeEntryKind::node));
+        tree.push_back(entry("a", group + ".1", group, "Matrix", er::TreeEntryKind::matrix));
+    }
+    index.rebuild({}, tree);
+    for (int repeat = 0; repeat < 10; ++repeat)
+        for (int i = 1; i <= 2000; ++i)
+            expect(index.matrixPath("a", "Group " + juce::String(i) + "/Matrix")
+                       == er::ProviderPath::qualify("a", juce::String(i) + ".1"),
+                   "Large-tree matrix lookups must retain the correct address");
+}
+
+void testTreeIdentityRevision()
+{
+    er::ControlTreeModel tree;
+    tree.upsertNode("1", "Routing");
+    tree.upsertNode("10", "Other");
+    tree.upsertNode("1.1", "Inputs");
+    tree.upsertNode("1.1.1", "Nested");
+    tree.upsertNode("10.1", "Unrelated");
+    const auto children = tree.childrenOf("1");
+    expect(children.size() == 1 && children.front().path == "1.1",
+           "Subtree child lookup must exclude descendants and similar sibling prefixes");
+    expect(tree.childrenOf({}).size() == 2, "Root child lookup must retain all top-level entries");
+    tree.upsertMatrix("1.2", "Matrix", {}, {});
+    auto identity = tree.identityRevision();
+    const auto previousRevision = tree.revision();
+    er::MatrixInfo tally;
+    tally.connectionsPresent = true;
+    tally.connections.push_back({0, {1}, 0, 0});
+    tree.upsertMatrix("1.2", {}, {}, tally);
+    tree.markDirectoryLoading("1", true);
+    tree.markDirectoryLoaded("1");
+    expect(tree.revision() != previousRevision, "Live matrix/directory updates must refresh the browser");
+    expect(tree.identityRevision() == identity,
+           "Crosspoints and directory flags must not invalidate the identity index");
+    tree.upsertNode("1", "Renamed");
+    expect(tree.identityRevision() != identity, "Parent rename must invalidate full name paths");
+    identity = tree.identityRevision();
+    tree.clear();
+    expect(tree.identityRevision() != identity, "Disconnect/clear must invalidate old identities");
+}
+
 void testCliSwitchNavigation()
 {
     er::CliSnapshot snapshot;
@@ -928,6 +1034,8 @@ int main()
     testParameterDisplayNameFallback();
     testParameterValueFormatting();
     testCliSwitchNavigation();
+    testMappingIdentityIndex();
+    testTreeIdentityRevision();
 
     if (failures == 0)
     {

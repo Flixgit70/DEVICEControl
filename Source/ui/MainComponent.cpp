@@ -51,18 +51,6 @@ bool matrixAxisContainsSignal(const std::vector<MatrixAxisNode>& nodes, int numb
     return false;
 }
 
-bool hasUniqueNamePath(const ProviderManager& providers, const juce::String& providerId,
-                       const juce::String& namePath)
-{
-    int matches = 0;
-    for (const auto& parameter : providers.parameterSnapshot())
-        if (parameter.providerId == providerId
-            && parameter.treePath.replace(" / ", "/") == namePath
-            && ++matches > 1)
-            return false;
-    return matches == 1;
-}
-
 juce::String treeEntryNamePath(const std::vector<TreeEntry>& tree, const juce::String& targetPath)
 {
     std::map<juce::String, const TreeEntry*> byPath;
@@ -82,19 +70,7 @@ juce::String treeEntryNamePath(const std::vector<TreeEntry>& tree, const juce::S
     return parts.joinIntoString("/");
 }
 
-bool hasUniqueMatrixNamePath(const ProviderManager& providers, const juce::String& providerId,
-                             const juce::String& namePath)
-{
-    int matches = 0;
-    const auto tree = providers.treeSnapshot();
-    for (const auto& entry : tree)
-        if (entry.kind == TreeEntryKind::matrix
-            && ProviderPath::providerId(entry.path) == providerId
-            && treeEntryNamePath(tree, entry.path) == namePath
-            && ++matches > 1)
-            return false;
-    return matches == 1;
-}
+
 }
 TreePageSplitter::TreePageSplitter()
 {
@@ -185,18 +161,22 @@ MainComponent::MainComponent()
         pageSet.setMappingIdentityMode(nextMode);
         if (nextMode == MappingIdentityMode::fullNamePath)
         {
+            captureNameIdentitiesPending = true;
             captureAndResolveNameMappings(true);
             std::set<juce::String> connected;
             for (const auto& config : providerManager.providerConfigs())
                 if (providerManager.isProviderConnected(config.id)) connected.insert(config.id);
             scanProvidersForNameMappings(connected);
-            statusLabel.setText("Name-based mapping selected; scanning provider trees to match full name paths",
+            statusLabel.setText("Name-based mapping selected; matching full name paths",
                                 juce::dontSendNotification);
         }
         else
         {
+            pendingNameScanProviderIds.clear();
+            captureNameIdentitiesPending = false;
             statusLabel.setText("Path-address mapping selected", juce::dontSendNotification);
         }
+        workspace.refreshValues();
     };
     addAndMakeVisible(mappingIdentityMode);
 
@@ -381,6 +361,10 @@ MainComponent::MainComponent()
     providerPanel.setRecentHosts(settings.recentHosts());
     providerPanel.onConfigurationChanged = [this]
     {
+        nameScannedProviderIds.clear();
+        pendingNameScanProviderIds.clear();
+        activeNameScanProviderIds.clear();
+        mappingIdentityIndexValid = false;
         settings.saveProviderConfigs(providerManager.providerConfigs());
         lastNavigationTreeRevision = 0;
         lastStoreRevision = 0;
@@ -642,6 +626,15 @@ void MainComponent::timerCallback()
         if (connectedProviderIds.find(config.id) == connectedProviderIds.end())
             newlyConnected.insert(config.id);
     }
+    auto retainConnected = [&nowConnected] (std::set<juce::String>& ids)
+    {
+        for (auto it = ids.begin(); it != ids.end();)
+            if (nowConnected.count(*it) == 0) it = ids.erase(it);
+            else ++it;
+    };
+    retainConnected(nameScannedProviderIds);
+    retainConnected(pendingNameScanProviderIds);
+    retainConnected(activeNameScanProviderIds);
     connectedProviderIds = std::move(nowConnected);
     if (!newlyConnected.empty())
         refreshMappedParametersFor(newlyConnected);
@@ -671,8 +664,23 @@ void MainComponent::timerCallback()
     statusLabel.setText(status, juce::dontSendNotification);
 
     const bool nowScanning = providerManager.isScanning();
+    const bool nameScanFinished = !nowScanning && !activeNameScanProviderIds.empty();
+    if (nameScanFinished)
+    {
+        // Other browser actions may have narrowed an in-flight subtree scan.
+        // Only reuse a scan if every loaded node of that provider was collected.
+        const auto tree = providerManager.treeSnapshot();
+        for (const auto& id : activeNameScanProviderIds)
+            if (std::all_of(tree.begin(), tree.end(), [&id] (const TreeEntry& entry)
+                { return ProviderPath::providerId(entry.path) != id
+                    || entry.kind != TreeEntryKind::node || entry.directoryLoaded; }))
+                nameScannedProviderIds.insert(id);
+        activeNameScanProviderIds.clear();
+    }
     const auto navRev = providerManager.treeRevision();
-    const bool deferTreeRebuild = nowScanning && pendingBulkAction != BulkAction::none;
+    const bool navigationChanged = navRev != lastNavigationTreeRevision;
+    const bool deferTreeRebuild = nowScanning
+        && (pendingBulkAction != BulkAction::none || !activeNameScanProviderIds.empty());
     if (navRev != lastNavigationTreeRevision && !deferTreeRebuild)
     {
         treeBrowser.setEntries(providerManager.treeSnapshot());
@@ -683,8 +691,17 @@ void MainComponent::timerCallback()
     if (structureRev != lastParameterStructureRevision)
         lastParameterStructureRevision = structureRev;
 
+    if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath && !nowScanning
+        && (nameScanFinished || captureNameIdentitiesPending || !mappingIdentityIndexValid
+            || indexedParameterStructureRevision != structureRev
+            || indexedTreeIdentityRevision != providerManager.treeIdentityRevision()))
+    {
+        captureAndResolveNameMappings();
+        workspace.refreshValues();
+    }
+
     const auto rev = providerManager.parameterRevision();
-    if (rev != lastStoreRevision)
+    if (rev != lastStoreRevision || (navigationChanged && !nowScanning))
     {
         lastStoreRevision = rev;
         workspace.refreshValues();
@@ -699,11 +716,10 @@ void MainComponent::timerCallback()
             treeBrowser.setEntries(providerManager.treeSnapshot());
             lastNavigationTreeRevision = finalNavRev;
         }
-        if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath)
-            captureAndResolveNameMappings();
         finishBulkAction();
     }
     wasScanning = nowScanning;
+    startPendingNameMappingScan();
     treeBrowser.applyPendingFullRebuildIfSafe();
 }
 
@@ -729,100 +745,86 @@ void MainComponent::refreshMappedParametersFor(const std::set<juce::String>& pro
 
 void MainComponent::scanProvidersForNameMappings(const std::set<juce::String>& providerIds)
 {
-    std::set<juce::String> providersWithMappings;
     for (const auto& page : pageSet.pages())
         for (const auto& mapping : page.controls)
         {
             const auto id = ProviderPath::providerId(mapping.parameterPath);
-            if (!id.isEmpty() && providerIds.count(id) != 0)
-                providersWithMappings.insert(id);
+            if (providerIds.count(id) != 0 && nameScannedProviderIds.count(id) == 0
+                && activeNameScanProviderIds.count(id) == 0)
+                pendingNameScanProviderIds.insert(id);
         }
+    startPendingNameMappingScan();
+}
 
+void MainComponent::startPendingNameMappingScan()
+{
+    if (pageSet.mappingIdentityMode() != MappingIdentityMode::fullNamePath
+        || providerManager.isScanning() || !activeNameScanProviderIds.empty()) return;
+    if (pendingNameScanProviderIds.empty()) return;
+    const auto tree = providerManager.treeSnapshot();
     std::vector<juce::String> roots;
-    for (const auto& id : providersWithMappings)
-        roots.push_back(ProviderPath::root(id));
+    for (const auto& id : pendingNameScanProviderIds)
+        if (providerManager.isProviderConnected(id))
+        {
+            if (std::all_of(tree.begin(), tree.end(), [&id] (const TreeEntry& entry)
+                { return ProviderPath::providerId(entry.path) != id
+                    || entry.kind != TreeEntryKind::node || entry.directoryLoaded; }))
+            {
+                nameScannedProviderIds.insert(id);
+                continue;
+            }
+            roots.push_back(ProviderPath::root(id));
+            activeNameScanProviderIds.insert(id);
+        }
+    pendingNameScanProviderIds.clear();
     if (!roots.empty()) providerManager.startSubtreeScan(roots);
 }
 
 void MainComponent::captureAndResolveNameMappings(bool captureMissingIdentity)
 {
-    const auto parameters = providerManager.parameterSnapshot();
-    const auto tree = providerManager.treeSnapshot();
-    std::map<juce::String, std::vector<const ParameterInfo*>> byNamePath;
-    std::map<juce::String, std::vector<const TreeEntry*>> matricesByNamePath;
-    for (const auto& parameter : parameters)
-        byNamePath[parameter.providerId + "|" + parameter.treePath.replace(" / ", "/")].push_back(&parameter);
-    for (const auto& entry : tree)
-        if (entry.kind == TreeEntryKind::matrix)
-            matricesByNamePath[ProviderPath::providerId(entry.path) + "|"
-                               + treeEntryNamePath(tree, entry.path)].push_back(&entry);
-
+    if (!ensureMappingIdentityIndex()) return;
+    captureMissingIdentity = captureMissingIdentity || captureNameIdentitiesPending;
+    captureNameIdentitiesPending = false;
     bool changed = false;
     int matchedCount = 0;
     int unresolvedCount = 0;
     for (auto& page : pageSet.pages())
         for (auto& mapping : page.controls)
         {
-            if (mapping.type == ControlType::matrix)
+            const bool matrix = mapping.type == ControlType::matrix;
+            if (captureMissingIdentity && mapping.stableNamePath.isEmpty())
             {
-                const auto current = providerManager.findTreeEntry(mapping.parameterPath);
-                if (captureMissingIdentity && mapping.stableNamePath.isEmpty() && current
-                    && mapping.label == current->displayName())
+                if (matrix)
                 {
-                    mapping.stableNamePath = treeEntryNamePath(tree, mapping.parameterPath);
-                    changed = mapping.stableNamePath.isNotEmpty() || changed;
+                    const auto current = providerManager.findTreeEntry(mapping.parameterPath);
+                    if (current && mapping.label == current->displayName())
+                        mapping.stableNamePath = mappingIdentityIndex.matrixName(mapping.parameterPath);
                 }
-                if (mapping.stableNamePath.isEmpty())
+                else
                 {
-                    ++unresolvedCount;
-                    continue;
+                    const auto current = providerManager.findParameter(mapping.parameterPath);
+                    if (current && current->online && current->treePath.isNotEmpty()
+                        && current->treePath != current->localPath)
+                    {
+                        const auto name = current->treePath.replace(" / ", "/");
+                        if (mapping.label == current->fullTreeLabel() || mapping.label == name)
+                            mapping.stableNamePath = name;
+                    }
                 }
-
-                const auto providerId = ProviderPath::providerId(mapping.parameterPath);
-                const auto found = matricesByNamePath.find(providerId + "|" + mapping.stableNamePath);
-                if (found == matricesByNamePath.end() || found->second.size() != 1)
-                {
-                    ++unresolvedCount;
-                    continue;
-                }
-                const auto* match = found->second.front();
-                if (mapping.parameterPath != match->path)
-                {
-                    mapping.parameterPath = match->path;
-                    changed = true;
-                }
-                ++matchedCount;
-                continue;
+                changed = mapping.stableNamePath.isNotEmpty() || changed;
             }
-
-            const auto current = providerManager.findParameter(mapping.parameterPath);
-            if (captureMissingIdentity && mapping.stableNamePath.isEmpty() && current && current->online
-                && current->treePath.isNotEmpty() && current->treePath != current->localPath)
-            {
-                const auto localNamePath = current->treePath.replace(" / ", "/");
-                if (mapping.label == current->fullTreeLabel() || mapping.label == localNamePath)
-                {
-                    mapping.stableNamePath = localNamePath;
-                    changed = true;
-                }
-            }
-            if (mapping.stableNamePath.isEmpty())
-            {
-                ++unresolvedCount;
-                continue;
-            }
-
             const auto providerId = ProviderPath::providerId(mapping.parameterPath);
-            const auto found = byNamePath.find(providerId + "|" + mapping.stableNamePath);
-            if (found == byNamePath.end() || found->second.size() != 1)
+            const auto matchedPath = matrix
+                ? mappingIdentityIndex.matrixPath(providerId, mapping.stableNamePath)
+                : mappingIdentityIndex.parameterPath(providerId, mapping.stableNamePath);
+            if (mapping.stableNamePath.isEmpty() || matchedPath.isEmpty())
             {
                 ++unresolvedCount;
                 continue;
             }
-            const auto* match = found->second.front();
-            if (mapping.parameterPath != match->path)
+            if (mapping.parameterPath != matchedPath)
             {
-                mapping.parameterPath = match->path;
+                mapping.parameterPath = matchedPath;
                 changed = true;
             }
             ++matchedCount;
@@ -1005,95 +1007,80 @@ void MainComponent::deletePage(int index)
     statusLabel.setText("Deleted page: " + deletedName, juce::dontSendNotification);
 }
 
+bool MainComponent::ensureMappingIdentityIndex()
+{
+    if (providerManager.isScanning()) return false;
+    const auto parameterRevision = providerManager.parameterStructureRevision();
+    const auto treeRevision = providerManager.treeIdentityRevision();
+    if (mappingIdentityIndexValid && parameterRevision == indexedParameterStructureRevision
+        && treeRevision == indexedTreeIdentityRevision)
+        return true;
+
+    mappingIdentityIndex.rebuild(providerManager.parameterSnapshot(), providerManager.treeSnapshot());
+    indexedParameterStructureRevision = parameterRevision;
+    indexedTreeIdentityRevision = treeRevision;
+    // A discovery update during the snapshots must not authorise a write.
+    mappingIdentityIndexValid = parameterRevision == providerManager.parameterStructureRevision()
+        && treeRevision == providerManager.treeIdentityRevision() && !providerManager.isScanning();
+    return mappingIdentityIndexValid;
+}
+
+bool MainComponent::isNameMappingResolved(const juce::String& path, bool matrix)
+{
+    if (pageSet.mappingIdentityMode() != MappingIdentityMode::fullNamePath) return true;
+    if (providerManager.isScanning()) return false;
+    const auto& names = matrix ? visibleMatrixNames : visibleParameterNames;
+    const auto found = names.find(path);
+    // Live resolvers must never copy the provider tree. The UI timer rebuilds
+    // a stale index once; until then, fail closed for reads and writes.
+    if (found == names.end() || found->second.isEmpty() || !mappingIdentityIndexValid
+        || indexedParameterStructureRevision != providerManager.parameterStructureRevision()
+        || indexedTreeIdentityRevision != providerManager.treeIdentityRevision()) return false;
+    const auto providerId = ProviderPath::providerId(path);
+    const auto resolved = matrix ? mappingIdentityIndex.matrixPath(providerId, found->second)
+                                 : mappingIdentityIndex.parameterPath(providerId, found->second);
+    return resolved.isNotEmpty() && resolved == path;
+}
+
 void MainComponent::rebuildWorkspace()
 {
+    visibleParameterNames.clear();
+    visibleMatrixNames.clear();
     if (pageSet.pages().empty()) return;
     currentPage = juce::jlimit(0, (int) pageSet.pages().size() - 1, currentPage);
+    for (const auto& mapping : pageSet.pages()[(size_t) currentPage].controls)
+        (mapping.type == ControlType::matrix ? visibleMatrixNames : visibleParameterNames)
+            .emplace(mapping.parameterPath, mapping.stableNamePath);
+
     workspace.setPage(pageSet.pages()[(size_t) currentPage],
                       [this] (const juce::String& path) -> std::optional<ParameterInfo>
                       {
-                          const auto info = providerManager.findParameter(path);
-                          if (!info || pageSet.mappingIdentityMode() != MappingIdentityMode::fullNamePath)
-                              return info;
-                          const auto& controls = pageSet.pages()[(size_t) currentPage].controls;
-                          const auto mapping = std::find_if(controls.begin(), controls.end(), [&] (const ControlMapping& item)
-                          {
-                              return item.parameterPath == path;
-                          });
-                          if (mapping != controls.end()
-                              && (mapping->stableNamePath.isEmpty()
-                                  || providerManager.isScanning()
-                                  || info->treePath.replace(" / ", "/") != mapping->stableNamePath
-                                  || !hasUniqueNamePath(providerManager,
-                                      ProviderPath::providerId(path), mapping->stableNamePath)))
-                                  return std::nullopt;
-                          return info;
+                          if (!isNameMappingResolved(path)) return std::nullopt;
+                          return providerManager.findParameter(path);
                       },
                       [this] (const juce::String& path, const juce::var& value)
                       {
-                          if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath
-                              && !pageSet.pages().empty())
+                          if (!isNameMappingResolved(path))
                           {
-                              const auto& controls = pageSet.pages()[(size_t) currentPage].controls;
-                              const auto mapping = std::find_if(controls.begin(), controls.end(), [&] (const ControlMapping& item)
-                              {
-                                  return item.parameterPath == path;
-                              });
-                              if (mapping != controls.end())
-                              {
-                                  const auto info = providerManager.findParameter(path);
-                                  if (mapping->stableNamePath.isEmpty() || !info || providerManager.isScanning()
-                                      || info->treePath.replace(" / ", "/") != mapping->stableNamePath
-                                      || !hasUniqueNamePath(providerManager,
-                                          ProviderPath::providerId(path), mapping->stableNamePath))
-                                  {
-                                      statusLabel.setText("Write blocked: full name path has not been matched", juce::dontSendNotification);
-                                      return;
-                                  }
-                              }
+                              statusLabel.setText("Write blocked: full name path has not been matched", juce::dontSendNotification);
+                              return;
                           }
                           if (!providerManager.setParameterValue(path, value))
                               statusLabel.setText("Write failed: " + path, juce::dontSendNotification);
                       },
                       [this] (const juce::String& path) -> std::optional<TreeEntry>
                       {
-                          const auto entry = providerManager.findTreeEntry(path);
-                          if (!entry || pageSet.mappingIdentityMode() != MappingIdentityMode::fullNamePath)
-                              return entry;
-                          const auto& controls = pageSet.pages()[(size_t) currentPage].controls;
-                          const auto mapping = std::find_if(controls.begin(), controls.end(), [&] (const ControlMapping& item)
-                          {
-                              return item.parameterPath == path && item.type == ControlType::matrix;
-                          });
-                          if (mapping != controls.end()
-                              && (mapping->stableNamePath.isEmpty() || providerManager.isScanning()
-                                  || treeEntryNamePath(providerManager.treeSnapshot(), path) != mapping->stableNamePath
-                                  || !hasUniqueMatrixNamePath(providerManager,
-                                      ProviderPath::providerId(path), mapping->stableNamePath)))
-                              return std::nullopt;
-                          return entry;
+                          if (!isNameMappingResolved(path, true)) return std::nullopt;
+                          return providerManager.findTreeEntry(path);
                       },
                       [this] { return providerManager.parameterSnapshot(); },
                       [this] (const juce::String& path, int target, int source, bool connect)
                       {
-                          if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath
-                              && !pageSet.pages().empty())
+                          if (!isNameMappingResolved(path, true))
                           {
-                              const auto& controls = pageSet.pages()[(size_t) currentPage].controls;
-                              const auto mapping = std::find_if(controls.begin(), controls.end(), [&] (const ControlMapping& item)
-                              {
-                                  return item.parameterPath == path && item.type == ControlType::matrix;
-                              });
-                              if (mapping != controls.end()
-                                  && (mapping->stableNamePath.isEmpty() || providerManager.isScanning()
-                                      || treeEntryNamePath(providerManager.treeSnapshot(), path) != mapping->stableNamePath
-                                      || !hasUniqueMatrixNamePath(providerManager,
-                                          ProviderPath::providerId(path), mapping->stableNamePath)))
-                              {
-                                  statusLabel.setText("Matrix write blocked: full name path has not been matched",
-                                                      juce::dontSendNotification);
-                                  return false;
-                              }
+                              statusLabel.setText("Matrix write blocked: full name path has not been matched",
+                                                  juce::dontSendNotification);
+                              return false;
                           }
                           return providerManager.setMatrixCrosspoint(path, target, source, connect);
                       });
@@ -1329,6 +1316,12 @@ void MainComponent::loadProject()
             if (!ProjectService::load(file, loadedPages, providers, error)) { showError("Load project", error); return; }
 
             providerManager.setProviders(providers);
+            nameScannedProviderIds.clear();
+            pendingNameScanProviderIds.clear();
+            activeNameScanProviderIds.clear();
+            connectedProviderIds.clear();
+            mappingIdentityIndexValid = false;
+            captureNameIdentitiesPending = false;
             pageSet = std::move(loadedPages);
             mappingIdentityMode.setSelectedId(pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath ? 2 : 1,
                                               juce::dontSendNotification);

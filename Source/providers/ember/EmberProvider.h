@@ -38,6 +38,7 @@ public:
     bool isDirectoryLoaded(const juce::String& localPath) const override { return client.tree().isDirectoryLoaded(localPath); }
     bool isDirectoryLoading(const juce::String& localPath) const override { return client.tree().isDirectoryLoading(localPath); }
     std::uint64_t treeRevision() const override { return client.tree().revision(); }
+    std::uint64_t treeIdentityRevision() const override { return client.tree().identityRevision(); }
 
     std::vector<ParameterInfo> parameterSnapshot() const override { return client.parameters().snapshot(); }
     std::optional<ParameterInfo> findParameter(const juce::String& localPath) const override

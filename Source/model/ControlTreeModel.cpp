@@ -175,6 +175,7 @@ void ControlTreeModel::clear()
     rootLoaded = false;
     rootLoading = false;
     ++revisionCounter;
+    ++identityRevisionCounter;
 }
 
 juce::String ControlTreeModel::parentOf(const juce::String& path)
@@ -344,7 +345,7 @@ void ControlTreeModel::upsertNode(const juce::String& path, const juce::String& 
     e.parentPath = parentOf(path);
     if (identifier.isNotEmpty()) e.identifier = identifier;
     if (description.isNotEmpty()) e.description = description;
-    if (changed) ++revisionCounter;
+    if (changed) { ++revisionCounter; ++identityRevisionCounter; }
 }
 
 void ControlTreeModel::upsertParameter(const juce::String& path, const juce::String& identifier,
@@ -363,7 +364,7 @@ void ControlTreeModel::upsertParameter(const juce::String& path, const juce::Str
     e.description = description;
     e.writable = writable;
     e.online = online;
-    if (changed) ++revisionCounter;
+    if (changed) { ++revisionCounter; ++identityRevisionCounter; }
 }
 
 void ControlTreeModel::upsertMatrix(const juce::String& path, const juce::String& identifier,
@@ -379,6 +380,7 @@ void ControlTreeModel::upsertMatrix(const juce::String& path, const juce::String
     if (identifier.isNotEmpty() && e.identifier != identifier) { e.identifier = identifier; changed = true; }
     if (description.isNotEmpty() && e.description != description) { e.description = description; changed = true; }
 
+    if (changed) ++identityRevisionCounter;
     auto mergeScalar = [&changed] (auto& destination, const auto& source)
     {
         if (source && destination != source) { destination = source; changed = true; }
@@ -464,6 +466,7 @@ void ControlTreeModel::markDirectoryLoading(const juce::String& path, bool loadi
         e.kind = TreeEntryKind::node;
         e.path = path;
         e.parentPath = parentOf(path);
+        ++identityRevisionCounter;
     }
     if (e.directoryLoading != loading) { e.directoryLoading = loading; ++revisionCounter; }
 }
@@ -487,6 +490,7 @@ void ControlTreeModel::markDirectoryLoaded(const juce::String& path, bool loaded
         e.kind = TreeEntryKind::node;
         e.path = path;
         e.parentPath = parentOf(path);
+        ++identityRevisionCounter;
     }
     if (e.directoryLoaded != loaded || e.directoryLoading)
     {
@@ -532,8 +536,12 @@ std::vector<TreeEntry> ControlTreeModel::childrenOf(const juce::String& parentPa
     std::vector<TreeEntry> out;
     {
         const juce::ScopedLock sl(lock);
-        for (const auto& [key, value] : entries)
-            if (value.parentPath == parentPath) out.push_back(value);
+        // Entries are ordered by numeric-path text. Visit only this subtree;
+        // a recursive scan must not walk the entire provider for every node.
+        const auto prefix = parentPath.isEmpty() ? juce::String() : parentPath + ".";
+        auto it = prefix.isEmpty() ? entries.begin() : entries.lower_bound(prefix);
+        for (; it != entries.end() && (prefix.isEmpty() || it->first.startsWith(prefix)); ++it)
+            if (it->second.parentPath == parentPath) out.push_back(it->second);
     }
     std::sort(out.begin(), out.end(), [] (const TreeEntry& a, const TreeEntry& b)
     {

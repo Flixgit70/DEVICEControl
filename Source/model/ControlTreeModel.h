@@ -115,6 +115,8 @@ public:
     std::vector<TreeEntry> childrenOf(const juce::String& parentPath) const;
     std::vector<TreeEntry> snapshot() const;
     std::uint64_t revision() const noexcept { return revisionCounter.load(); }
+    // Names/topology only: crosspoint tallies and loading flags do not invalidate name indexes.
+    std::uint64_t identityRevision() const noexcept { return identityRevisionCounter.load(); }
 
     static juce::String parentOf(const juce::String& path);
     // Compare Ember path components as numbers, including provider-qualified paths.
@@ -142,5 +144,6 @@ private:
     bool rootLoaded = false;
     bool rootLoading = false;
     std::atomic<std::uint64_t> revisionCounter { 0 };
+    std::atomic<std::uint64_t> identityRevisionCounter { 0 };
 };
 }

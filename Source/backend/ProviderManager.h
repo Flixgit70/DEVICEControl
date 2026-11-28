@@ -55,6 +55,7 @@ public:
     std::optional<ParameterInfo> findParameter(const juce::String& qualifiedPath) const;
 
     std::uint64_t treeRevision() const;
+    std::uint64_t treeIdentityRevision() const;
     std::uint64_t parameterRevision() const;
     std::uint64_t parameterStructureRevision() const;
 

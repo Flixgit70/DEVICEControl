@@ -371,6 +371,17 @@ std::uint64_t ProviderManager::parameterRevision() const
     return rev;
 }
 
+std::uint64_t ProviderManager::treeIdentityRevision() const
+{
+    auto rev = configRevision;
+    for (const auto& s : sessions)
+    {
+        rev = combine(rev, s->backend ? s->backend->treeIdentityRevision() : 0u);
+        rev = combine(rev, s->backend && s->backend->isConnected() ? 1u : 0u);
+    }
+    return rev;
+}
+
 std::uint64_t ProviderManager::parameterStructureRevision() const
 {
     auto rev = configRevision;

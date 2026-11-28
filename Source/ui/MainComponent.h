@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "../backend/ProviderManager.h"
 #include "../model/PageModel.h"
+#include "../model/MappingIdentityIndex.h"
 #include "../services/CsvService.h"
 #include "../services/ProjectService.h"
 #include "../services/AppSettingsService.h"
@@ -60,6 +61,9 @@ private:
     void scheduleWorkspaceRebuild();
     void refreshMappedParametersFor(const std::set<juce::String>& providerIds);
     void scanProvidersForNameMappings(const std::set<juce::String>& providerIds);
+    void startPendingNameMappingScan();
+    bool ensureMappingIdentityIndex();
+    bool isNameMappingResolved(const juce::String& path, bool matrix = false);
     void captureAndResolveNameMappings(bool captureMissingIdentity = false);
     void pollVisibleMeters();
     void addMappings(const std::vector<juce::String>& paths, ControlType type);
@@ -96,6 +100,12 @@ private:
     BulkAction pendingBulkAction = BulkAction::none;
     std::vector<juce::String> pendingBulkRoots;
     std::set<juce::String> connectedProviderIds;
+    std::set<juce::String> nameScannedProviderIds, pendingNameScanProviderIds, activeNameScanProviderIds;
+    MappingIdentityIndex mappingIdentityIndex;
+    bool mappingIdentityIndexValid = false;
+    bool captureNameIdentitiesPending = false;
+    std::uint64_t indexedParameterStructureRevision = 0, indexedTreeIdentityRevision = 0;
+    std::map<juce::String, juce::String> visibleParameterNames, visibleMatrixNames;
 
     juce::ImageComponent k2Logo;
     BrandTitle appTitle;

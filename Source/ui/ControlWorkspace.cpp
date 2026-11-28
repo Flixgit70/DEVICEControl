@@ -297,21 +297,32 @@ void ControlWorkspace::resizeSelectedContentTiles(const juce::String& sourcePath
 
 void ControlWorkspace::refreshValues()
 {
+    const bool tilesVisible = viewMode == PageViewMode::tiles;
+    if (!tilesVisible) listView.refreshValues();
     std::vector<ParameterInfo> parameters;
-    if (parameterSnapshot) parameters = parameterSnapshot();
+    bool haveMatrixParameters = false;
     for (auto& tile : tiles)
     {
         if (tile->mapping().type == ControlType::matrix)
         {
+            auto* matrixTile = dynamic_cast<MatrixPageTile*>(tile.get());
+            if (!matrixTile || (!tilesVisible && !matrixTile->hasVisibleEditor())) continue;
             if (matrixResolver)
                 if (auto entry = matrixResolver(tile->mapping().parameterPath))
-                    if (auto* matrixTile = dynamic_cast<MatrixPageTile*>(tile.get()))
+                    {
+                        // No full snapshot for ordinary controls, hidden
+                        // matrices, or identities still waiting for a scan.
+                        if (!haveMatrixParameters && parameterSnapshot)
+                        {
+                            parameters = parameterSnapshot();
+                            haveMatrixParameters = true;
+                        }
                         matrixTile->refreshMatrix(*entry, parameters);
+                    }
         }
-        else if (parameterResolver)
+        else if (tilesVisible && parameterResolver)
             if (auto p = parameterResolver(tile->mapping().parameterPath)) tile->refresh(*p);
     }
-    listView.refreshValues();
 }
 
 void ControlWorkspace::paint(juce::Graphics& g)
@@ -404,5 +415,6 @@ void ControlWorkspace::applyViewMode(PageViewMode mode, bool notify)
     resized();
     if (notify && onViewModeChanged)
         onViewModeChanged(mode);
+    if (notify) refreshValues();
 }
 }
