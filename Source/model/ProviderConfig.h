@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <vector>
 
 namespace er
 {
@@ -89,6 +90,22 @@ struct ProviderPath
     static bool isProviderRoot(const juce::String& path)
     {
         return isQualified(path) && path.indexOfChar('.') < 0;
+    }
+
+    /** Directories on one saved numeric route, root first. Reading these
+        restores ancestor names without recursively visiting sibling branches. */
+    static std::vector<juce::String> ancestorDirectories(const juce::String& qualifiedPath)
+    {
+        std::vector<juce::String> result;
+        if (localPath(qualifiedPath).isEmpty()) return result;
+        auto directory = parentDirectory(qualifiedPath);
+        while (directory.isNotEmpty())
+        {
+            result.insert(result.begin(), directory);
+            if (isProviderRoot(directory)) break;
+            directory = parentDirectory(directory);
+        }
+        return result;
     }
 };
 }

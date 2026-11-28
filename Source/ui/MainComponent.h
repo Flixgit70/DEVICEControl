@@ -60,8 +60,6 @@ private:
     void rebuildWorkspace();
     void scheduleWorkspaceRebuild();
     void refreshMappedParametersFor(const std::set<juce::String>& providerIds);
-    void scanProvidersForNameMappings(const std::set<juce::String>& providerIds);
-    void startPendingNameMappingScan();
     bool ensureMappingIdentityIndex();
     bool isNameMappingResolved(const juce::String& path, bool matrix = false);
     void captureAndResolveNameMappings(bool captureMissingIdentity = false);
@@ -100,7 +98,6 @@ private:
     BulkAction pendingBulkAction = BulkAction::none;
     std::vector<juce::String> pendingBulkRoots;
     std::set<juce::String> connectedProviderIds;
-    std::set<juce::String> nameScannedProviderIds, pendingNameScanProviderIds, activeNameScanProviderIds;
     MappingIdentityIndex mappingIdentityIndex;
     bool mappingIdentityIndexValid = false;
     bool captureNameIdentitiesPending = false;

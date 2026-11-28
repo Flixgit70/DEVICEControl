@@ -152,7 +152,8 @@ MainComponent::MainComponent()
     mappingIdentityMode.addItem("Path address", 1);
     mappingIdentityMode.addItem("Full name path", 2);
     mappingIdentityMode.setSelectedId(1, juce::dontSendNotification);
-    mappingIdentityMode.setTooltip("Choose how project controls are matched after reconnecting to Ember+.");
+    mappingIdentityMode.setTooltip("Match panel controls by numeric address or full name in the loaded tree. "
+                                   "Full name mode does not scan the complete provider.");
     mappingIdentityMode.onChange = [this]
     {
         const auto nextMode = mappingIdentityMode.getSelectedId() == 2
@@ -163,16 +164,11 @@ MainComponent::MainComponent()
         {
             captureNameIdentitiesPending = true;
             captureAndResolveNameMappings(true);
-            std::set<juce::String> connected;
-            for (const auto& config : providerManager.providerConfigs())
-                if (providerManager.isProviderConnected(config.id)) connected.insert(config.id);
-            scanProvidersForNameMappings(connected);
             statusLabel.setText("Name-based mapping selected; matching full name paths",
                                 juce::dontSendNotification);
         }
         else
         {
-            pendingNameScanProviderIds.clear();
             captureNameIdentitiesPending = false;
             statusLabel.setText("Path-address mapping selected", juce::dontSendNotification);
         }
@@ -361,9 +357,6 @@ MainComponent::MainComponent()
     providerPanel.setRecentHosts(settings.recentHosts());
     providerPanel.onConfigurationChanged = [this]
     {
-        nameScannedProviderIds.clear();
-        pendingNameScanProviderIds.clear();
-        activeNameScanProviderIds.clear();
         mappingIdentityIndexValid = false;
         settings.saveProviderConfigs(providerManager.providerConfigs());
         lastNavigationTreeRevision = 0;
@@ -626,15 +619,6 @@ void MainComponent::timerCallback()
         if (connectedProviderIds.find(config.id) == connectedProviderIds.end())
             newlyConnected.insert(config.id);
     }
-    auto retainConnected = [&nowConnected] (std::set<juce::String>& ids)
-    {
-        for (auto it = ids.begin(); it != ids.end();)
-            if (nowConnected.count(*it) == 0) it = ids.erase(it);
-            else ++it;
-    };
-    retainConnected(nameScannedProviderIds);
-    retainConnected(pendingNameScanProviderIds);
-    retainConnected(activeNameScanProviderIds);
     connectedProviderIds = std::move(nowConnected);
     if (!newlyConnected.empty())
         refreshMappedParametersFor(newlyConnected);
@@ -664,23 +648,9 @@ void MainComponent::timerCallback()
     statusLabel.setText(status, juce::dontSendNotification);
 
     const bool nowScanning = providerManager.isScanning();
-    const bool nameScanFinished = !nowScanning && !activeNameScanProviderIds.empty();
-    if (nameScanFinished)
-    {
-        // Other browser actions may have narrowed an in-flight subtree scan.
-        // Only reuse a scan if every loaded node of that provider was collected.
-        const auto tree = providerManager.treeSnapshot();
-        for (const auto& id : activeNameScanProviderIds)
-            if (std::all_of(tree.begin(), tree.end(), [&id] (const TreeEntry& entry)
-                { return ProviderPath::providerId(entry.path) != id
-                    || entry.kind != TreeEntryKind::node || entry.directoryLoaded; }))
-                nameScannedProviderIds.insert(id);
-        activeNameScanProviderIds.clear();
-    }
     const auto navRev = providerManager.treeRevision();
     const bool navigationChanged = navRev != lastNavigationTreeRevision;
-    const bool deferTreeRebuild = nowScanning
-        && (pendingBulkAction != BulkAction::none || !activeNameScanProviderIds.empty());
+    const bool deferTreeRebuild = nowScanning && pendingBulkAction != BulkAction::none;
     if (navRev != lastNavigationTreeRevision && !deferTreeRebuild)
     {
         treeBrowser.setEntries(providerManager.treeSnapshot());
@@ -692,7 +662,7 @@ void MainComponent::timerCallback()
         lastParameterStructureRevision = structureRev;
 
     if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath && !nowScanning
-        && (nameScanFinished || captureNameIdentitiesPending || !mappingIdentityIndexValid
+        && (captureNameIdentitiesPending || !mappingIdentityIndexValid
             || indexedParameterStructureRevision != structureRev
             || indexedTreeIdentityRevision != providerManager.treeIdentityRevision()))
     {
@@ -719,7 +689,6 @@ void MainComponent::timerCallback()
         finishBulkAction();
     }
     wasScanning = nowScanning;
-    startPendingNameMappingScan();
     treeBrowser.applyPendingFullRebuildIfSafe();
 }
 
@@ -727,57 +696,21 @@ void MainComponent::refreshMappedParametersFor(const std::set<juce::String>& pro
 {
     if (providerIds.empty()) return;
 
-    if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath)
-    {
-        scanProvidersForNameMappings(providerIds);
-        return;
-    }
-
     std::set<juce::String> directories;
     for (const auto& page : pageSet.pages())
         for (const auto& mapping : page.controls)
             if (providerIds.find(ProviderPath::providerId(mapping.parameterPath)) != providerIds.end())
+            {
                 directories.insert(ProviderPath::parentDirectory(mapping.parameterPath));
+                if (pageSet.mappingIdentityMode() == MappingIdentityMode::fullNamePath)
+                    for (const auto& ancestor : ProviderPath::ancestorDirectories(mapping.parameterPath))
+                        directories.insert(ancestor);
+            }
 
+    // Both mapping modes use ordinary numeric GetDirectory requests. Names
+    // never trigger recursive discovery; remapping uses only loaded metadata.
     for (const auto& directory : directories)
         providerManager.requestDirectory(directory);
-}
-
-void MainComponent::scanProvidersForNameMappings(const std::set<juce::String>& providerIds)
-{
-    for (const auto& page : pageSet.pages())
-        for (const auto& mapping : page.controls)
-        {
-            const auto id = ProviderPath::providerId(mapping.parameterPath);
-            if (providerIds.count(id) != 0 && nameScannedProviderIds.count(id) == 0
-                && activeNameScanProviderIds.count(id) == 0)
-                pendingNameScanProviderIds.insert(id);
-        }
-    startPendingNameMappingScan();
-}
-
-void MainComponent::startPendingNameMappingScan()
-{
-    if (pageSet.mappingIdentityMode() != MappingIdentityMode::fullNamePath
-        || providerManager.isScanning() || !activeNameScanProviderIds.empty()) return;
-    if (pendingNameScanProviderIds.empty()) return;
-    const auto tree = providerManager.treeSnapshot();
-    std::vector<juce::String> roots;
-    for (const auto& id : pendingNameScanProviderIds)
-        if (providerManager.isProviderConnected(id))
-        {
-            if (std::all_of(tree.begin(), tree.end(), [&id] (const TreeEntry& entry)
-                { return ProviderPath::providerId(entry.path) != id
-                    || entry.kind != TreeEntryKind::node || entry.directoryLoaded; }))
-            {
-                nameScannedProviderIds.insert(id);
-                continue;
-            }
-            roots.push_back(ProviderPath::root(id));
-            activeNameScanProviderIds.insert(id);
-        }
-    pendingNameScanProviderIds.clear();
-    if (!roots.empty()) providerManager.startSubtreeScan(roots);
 }
 
 void MainComponent::captureAndResolveNameMappings(bool captureMissingIdentity)
@@ -837,7 +770,7 @@ void MainComponent::captureAndResolveNameMappings(bool captureMissingIdentity)
     }
     statusLabel.setText("Full name path mapping: " + juce::String(matchedCount)
                             + " matched, " + juce::String(unresolvedCount)
-                            + " unresolved (missing or duplicate names)",
+                            + " unresolved (not loaded, missing or duplicate names)",
                         juce::dontSendNotification);
 }
 
@@ -1316,9 +1249,6 @@ void MainComponent::loadProject()
             if (!ProjectService::load(file, loadedPages, providers, error)) { showError("Load project", error); return; }
 
             providerManager.setProviders(providers);
-            nameScannedProviderIds.clear();
-            pendingNameScanProviderIds.clear();
-            activeNameScanProviderIds.clear();
             connectedProviderIds.clear();
             mappingIdentityIndexValid = false;
             captureNameIdentitiesPending = false;

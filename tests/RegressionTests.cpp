@@ -795,6 +795,25 @@ void testParameterValueFormatting()
     expect(p.formattedValue() == "On Air", "Enum status values must show their Ember label when available");
 }
 
+void testMappedNumericDirectoryRoutes()
+{
+    const auto path = er::ProviderPath::qualify("a", "1.2.3");
+    const auto route = er::ProviderPath::ancestorDirectories(path);
+    expect(route == std::vector<juce::String> { "@a", "@a.1", "@a.1.2" },
+           "Restoring a full name must read only the saved numeric ancestry, root first");
+    expect(er::ProviderPath::ancestorDirectories("@a.1") == std::vector<juce::String> { "@a" },
+           "A top-level parameter needs only the provider root directory");
+    expect(er::ProviderPath::ancestorDirectories("@a").empty(),
+           "A provider root is not a mapped control and must not schedule discovery");
+    std::set<juce::String> directories(route.begin(), route.end());
+    for (const auto& directory : er::ProviderPath::ancestorDirectories("@a.1.4.5"))
+        directories.insert(directory);
+    expect(directories == std::set<juce::String> { "@a", "@a.1", "@a.1.2", "@a.1.4" },
+           "Shared panel ancestry must be deduplicated without requesting unrelated branches or leaves");
+    expect(er::ProviderPath::ancestorDirectories("1.2.3") == std::vector<juce::String> { "1", "1.2" },
+           "Legacy numeric routes must terminate without inventing a provider");
+}
+
 void testMappingIdentityIndex()
 {
     er::MappingIdentityIndex index;
@@ -1082,6 +1101,7 @@ int main()
     testParameterValueFormatting();
     testCliSwitchNavigation();
     testMappingIdentityIndex();
+    testMappedNumericDirectoryRoutes();
     testTreeIdentityRevision();
 
     if (failures == 0)
